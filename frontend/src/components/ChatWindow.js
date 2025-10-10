@@ -13,7 +13,7 @@ const FacebookIcon = ({ className }) => (
   </svg>
 );
 
-const ChatWindow = ({ agents, userRole }) => {
+const ChatWindow = ({ agents, userRole, onAssignChat }) => {
   const { selectedChat: chat, sendMessage } = useChatContext();
   const [message, setMessage] = useState('');
   const [isSending, setIsSending] = useState(false);
@@ -86,7 +86,7 @@ const ChatWindow = ({ agents, userRole }) => {
           </div>
         </div>
 
-        {(userRole === 'admin' || userRole === 'supervisor') && (
+        {(userRole === 'admin') && (
           <div className="flex items-center space-x-2">
             <Select
               value={chat.assigned_to || 'unassigned'}

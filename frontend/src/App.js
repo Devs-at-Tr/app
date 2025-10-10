@@ -84,14 +84,10 @@ function App() {
           <Route
             path="/signup"
             element={
-              user ? (
-                user.role === 'admin' ? (
-                  <SignupPage onUserCreated={handleLogout} />
-                ) : (
-                  <Navigate to="/" replace />
-                )
+              !user ? (
+                <SignupPage />
               ) : (
-                <Navigate to="/login" replace />
+                <Navigate to="/" replace />
               )
             }
           />

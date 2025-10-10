@@ -14,7 +14,8 @@ const ChatSidebar = ({
   selectedChatId,
   onSelectChat,
   onRefresh,
-  selectedPlatform = 'all'
+  selectedPlatform = 'all',
+  loading = false
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -86,7 +87,12 @@ const ChatSidebar = ({
 
       {/* Chat List */}
       <div className="flex-1 overflow-y-auto chat-scroll" data-testid="chat-list">
-        {filteredChats.length === 0 ? (
+        {loading ? (
+          <div className="p-4 text-center">
+            <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-purple-500 mx-auto"></div>
+            <p className="text-gray-500 text-sm mt-2">Loading chats...</p>
+          </div>
+        ) : filteredChats.length === 0 ? (
           <div className="p-4 text-center text-gray-500">
             No chats found
           </div>

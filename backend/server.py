@@ -75,10 +75,10 @@ async def get_current_user(authorization: Optional[str] = Header(None), db: Sess
 
 # Dependency for admin only
 async def get_admin_user(current_user: User = Depends(get_current_user)) -> User:
-    if current_user.role not in {UserRole.ADMIN, UserRole.SUPERVISOR}:
+    if current_user.role != UserRole.ADMIN:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin or supervisor access required"
+            detail="Admin access required"
         )
     return current_user
 
@@ -114,27 +114,32 @@ def register(user_data: UserRegister, db: Session = Depends(get_db)):
     return new_user
 
 @api_router.post("/auth/signup", response_model=UserResponse)
-def admin_signup(
+def signup(
     user_data: UserRegister,
-    current_user: User = Depends(get_admin_only_user),
     db: Session = Depends(get_db)
 ):
-    """Admin-only endpoint to create new users."""
+    """Public endpoint to create new agent accounts."""
     existing_user = db.query(User).filter(User.email == user_data.email).first()
     if existing_user:
         raise HTTPException(status_code=400, detail="Email already registered")
+
+    # Only allow agent role for public signup
+    if user_data.role not in ['agent', None]:
+        role = 'agent'
+    else:
+        role = user_data.role or 'agent'
 
     new_user = User(
         name=user_data.name,
         email=user_data.email,
         password_hash=get_password_hash(user_data.password),
-        role=user_data.role
+        role=role
     )
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
 
-    logger.info(f"Admin {current_user.email} created user: {new_user.email} ({new_user.role})")
+    logger.info(f"New agent registered: {new_user.email}")
     return new_user
 
 @api_router.post("/auth/login", response_model=TokenResponse)
@@ -579,7 +584,7 @@ async def handle_instagram_webhook(request: Request, db: Session = Depends(get_d
                             notify_users.add(str(chat.assigned_to))
                         
                         # Add admin users
-                        admin_users = db.query(User).filter(User.role.in_([UserRole.ADMIN, UserRole.SUPERVISOR])).all()
+                        admin_users = db.query(User).filter(User.role == UserRole.ADMIN).all()
                         notify_users.update(str(user.id) for user in admin_users)
                         
                         message_payload = MessageResponse.model_validate(new_message).model_dump(mode="json")
@@ -767,8 +772,8 @@ async def send_message(chat_id: str, message_data: MessageCreate, current_user: 
     if chat.assigned_to:
         notify_users.add(str(chat.assigned_to))
     
-    # Add admin and supervisor users
-    admin_users = db.query(User).filter(User.role.in_([UserRole.ADMIN, UserRole.SUPERVISOR])).all()
+    # Add admin users
+    admin_users = db.query(User).filter(User.role == UserRole.ADMIN).all()
     notify_users.update(str(user.id) for user in admin_users)
     
     # Broadcast message sent notification
@@ -787,7 +792,7 @@ async def send_message(chat_id: str, message_data: MessageCreate, current_user: 
 
 @api_router.get("/dashboard/stats", response_model=DashboardStats)
 def get_dashboard_stats(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    if current_user.role in {UserRole.ADMIN, UserRole.SUPERVISOR}:
+    if current_user.role == UserRole.ADMIN:
         total_chats = db.query(Chat).count()
         assigned_chats = db.query(Chat).filter(Chat.status == ChatStatus.ASSIGNED).count()
         unassigned_chats = db.query(Chat).filter(Chat.status == ChatStatus.UNASSIGNED).count()
@@ -1018,9 +1023,34 @@ async def handle_facebook_webhook(request: Request, db: Session = Depends(get_db
                         
                         # Update chat
                         chat.last_message = processed.get("text", "")
+                        chat.unread_count += 1
+                        chat.updated_at = datetime.now(timezone.utc)
                         
                         db.commit()
+                        db.refresh(new_message)
                         logger.info(f"Processed Facebook message from {sender_id} on page {page_id}")
+                        
+                        # Notify relevant users about new message
+                        notify_users = set()
+                        
+                        # Add assigned agent if any
+                        if chat.assigned_to:
+                            notify_users.add(str(chat.assigned_to))
+                        
+                        # Add admin users
+                        admin_users = db.query(User).filter(User.role == UserRole.ADMIN).all()
+                        notify_users.update(str(user.id) for user in admin_users)
+                        
+                        message_payload = MessageResponse.model_validate(new_message).model_dump(mode="json")
+
+                        # Broadcast new message notification
+                        await ws_manager.broadcast_to_users(notify_users, {
+                            "type": "new_message",
+                            "chat_id": str(chat.id),
+                            "platform": chat.platform.value,
+                            "sender_id": sender_id,
+                            "message": message_payload
+                        })
         
         return {"status": "received"}
     

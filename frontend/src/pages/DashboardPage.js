@@ -77,7 +77,7 @@ const DashboardContent = ({ user, onLogout }) => {
       // Get stats and agents data
       const [statsRes, agentsRes] = await Promise.all([
         axios.get(`${API}/dashboard/stats`, axiosConfig),
-        (user.role === 'admin' || user.role === 'supervisor')
+        (user.role === 'admin')
           ? axios.get(`${API}/users/agents`, axiosConfig)
           : Promise.resolve({ data: [] })
       ]);
@@ -102,7 +102,8 @@ const DashboardContent = ({ user, onLogout }) => {
   const handlePlatformChange = async (platform) => {
     setSelectedPlatform(platform);
     try {
-      await loadData(platform);
+      // Only reload chats when platform changes, not stats/agents
+      await loadChats(platform);
     } catch (error) {
       console.error('Error changing platform:', error);
     }
@@ -132,7 +133,8 @@ const DashboardContent = ({ user, onLogout }) => {
         { agent_id: agentId },
         { headers: { Authorization: `Bearer ${token}` } }
       );
-      loadData();
+      // Only reload chats, not the entire page
+      await loadChats(selectedPlatform);
       if (selectedChat?.id === chatId) {
         handleSelectChat(chatId);
       }
@@ -141,30 +143,37 @@ const DashboardContent = ({ user, onLogout }) => {
     }
   };
 
-  if (loading || chatsLoading || error || chatsError) {
+  // Only show initial loading screen, not on subsequent updates
+  if (loading && !stats) {
     return (
       <div className="min-h-screen bg-[#0f0f1a] flex flex-col items-center justify-center">
-        {(loading || chatsLoading) && (
-          <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-purple-500 mb-4"></div>
-        )}
-        {(error || chatsError) && (
-          <div className="text-red-500 bg-red-500/10 px-4 py-2 rounded-md">
-            {error || chatsError}
-            <button 
-              onClick={() => loadData()} 
-              className="ml-4 text-purple-400 hover:text-purple-300"
-            >
-              Retry
-            </button>
-          </div>
-        )}
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-purple-500 mb-4"></div>
       </div>
     );
   }
 
+  // Show error as a toast/banner instead of blocking the entire page
+  const showError = error || chatsError;
+
   return (
     <div className="min-h-screen bg-[#0f0f1a]" data-testid="dashboard-page">
       <Header user={user} onLogout={onLogout} />
+      
+      {/* Error Banner */}
+      {showError && (
+        <div className="mx-3 mt-3 p-3 bg-red-500/10 border border-red-500/50 rounded-lg flex items-center justify-between">
+          <span className="text-red-400 text-sm">{showError}</span>
+          <button 
+            onClick={() => {
+              setError(null);
+              loadData();
+            }} 
+            className="text-purple-400 hover:text-purple-300 text-sm font-semibold"
+          >
+            Retry
+          </button>
+        </div>
+      )}
       
       <div className="p-3 space-y-3">
         <StatsCards stats={stats} />
@@ -215,6 +224,7 @@ const DashboardContent = ({ user, onLogout }) => {
                   onSelectChat={handleSelectChat}
                   onRefresh={loadData}
                   selectedPlatform={selectedPlatform}
+                  loading={chatsLoading}
                 />
               </div>
               

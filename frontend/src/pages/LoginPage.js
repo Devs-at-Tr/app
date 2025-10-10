@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Link } from 'react-router-dom';
 import axios from 'axios';
 import { API } from '../App';
 import { Button } from '../components/ui/button';
@@ -100,6 +101,16 @@ const LoginPage = ({ onLogin }) => {
               <p>Admin: admin@ticklegram.com / admin123</p>
               <p>Agent: agent1@ticklegram.com / agent123</p>
             </div>
+          </div>
+
+          {/* Signup Link */}
+          <div className="mt-6 text-center">
+            <p className="text-sm text-gray-400">
+              Don't have an account?{' '}
+              <Link to="/signup" className="text-purple-400 hover:text-purple-300 font-semibold">
+                Sign Up
+              </Link>
+            </p>
           </div>
         </div>
       </div>
