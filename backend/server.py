@@ -75,6 +75,14 @@ async def get_current_user(authorization: Optional[str] = Header(None), db: Sess
 
 # Dependency for admin only
 async def get_admin_user(current_user: User = Depends(get_current_user)) -> User:
+    if current_user.role not in {UserRole.ADMIN, UserRole.SUPERVISOR}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin or supervisor access required"
+        )
+    return current_user
+
+async def get_admin_only_user(current_user: User = Depends(get_current_user)) -> User:
     if current_user.role != UserRole.ADMIN:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -103,6 +111,30 @@ def register(user_data: UserRegister, db: Session = Depends(get_db)):
     db.refresh(new_user)
     
     logger.info(f"User registered: {new_user.email}")
+    return new_user
+
+@api_router.post("/auth/signup", response_model=UserResponse)
+def admin_signup(
+    user_data: UserRegister,
+    current_user: User = Depends(get_admin_only_user),
+    db: Session = Depends(get_db)
+):
+    """Admin-only endpoint to create new users."""
+    existing_user = db.query(User).filter(User.email == user_data.email).first()
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    new_user = User(
+        name=user_data.name,
+        email=user_data.email,
+        password_hash=get_password_hash(user_data.password),
+        role=user_data.role
+    )
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+
+    logger.info(f"Admin {current_user.email} created user: {new_user.email} ({new_user.role})")
     return new_user
 
 @api_router.post("/auth/login", response_model=TokenResponse)
@@ -265,10 +297,77 @@ async def reply_to_instagram_comment(
         logger.error(f"Error replying to Instagram comment: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@api_router.get("/facebook/comments")
+async def list_facebook_comments(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """List Facebook comments in a chat-friendly format."""
+    try:
+        pages = db.query(FacebookPage).all()
+        if not pages:
+            return []
+
+        comments = []
+        for page in pages:
+            if facebook_client.mode == FacebookMode.MOCK:
+                for index in range(5):
+                    timestamp = datetime.now(timezone.utc) - timedelta(minutes=index * 7)
+                    comments.append({
+                        "id": f"{page.page_id}_comment_{index}",
+                        "username": f"facebook_user_{index + 1}",
+                        "text": f"This is a mock Facebook comment {index + 1} on {page.page_name or 'your page'}.",
+                        "timestamp": timestamp.isoformat(),
+                        "profile_pic": None,
+                        "replies": [],
+                        "post": {
+                            "id": f"{page.page_id}_post_{index}",
+                            "username": page.page_name or "Facebook Page",
+                            "profile_pic": None,
+                            "media_type": "IMAGE",
+                            "media_url": f"https://picsum.photos/seed/{page.page_id}{index}/800",
+                            "permalink": f"https://facebook.com/{page.page_id}/posts/mock_{index}",
+                            "caption": f"Mock Facebook post {index + 1} for {page.page_name or 'your page'}.",
+                            "timestamp": timestamp.isoformat()
+                        }
+                    })
+            else:
+                logger.info("Facebook comment retrieval is not implemented for REAL mode yet.")
+
+        comments.sort(key=lambda item: item["timestamp"], reverse=True)
+        return comments
+    except Exception as exc:
+        logger.error(f"Error fetching Facebook comments: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"message": "Failed to fetch Facebook comments", "error": str(exc)}
+        )
+
+@api_router.post("/facebook/comments/{comment_id}/reply")
+async def reply_to_facebook_comment(
+    comment_id: str,
+    reply_data: dict,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Reply to a Facebook comment (mock support)."""
+    try:
+        if facebook_client.mode == FacebookMode.MOCK:
+            logger.info(f"Mock reply to Facebook comment {comment_id}: {reply_data.get('text', '')}")
+            return {"success": True, "comment_id": comment_id, "mode": "mock"}
+
+        logger.info("Facebook comment reply not implemented for REAL mode.")
+        raise HTTPException(status_code=501, detail="Facebook comment reply not implemented in real mode")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Error replying to Facebook comment: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
+
 @api_router.post("/instagram/accounts", response_model=InstagramAccountResponse)
 async def connect_instagram_account(
     data: InstagramConnect, 
-    current_user: User = Depends(get_current_user), 
+    current_user: User = Depends(get_admin_only_user), 
     db: Session = Depends(get_db)
 ):
     """Connect an Instagram Business Account"""
@@ -315,7 +414,7 @@ async def connect_instagram_account(
     return new_account
 
 @api_router.get("/instagram/accounts", response_model=List[InstagramAccountResponse])
-def list_instagram_accounts(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def list_instagram_accounts(current_user: User = Depends(get_admin_only_user), db: Session = Depends(get_db)):
     """List all connected Instagram accounts for current user"""
     accounts = db.query(InstagramAccount).filter(InstagramAccount.user_id == current_user.id).all()
     return accounts
@@ -323,7 +422,7 @@ def list_instagram_accounts(current_user: User = Depends(get_current_user), db: 
 @api_router.get("/instagram/accounts/{account_id}", response_model=InstagramAccountResponse)
 def get_instagram_account(
     account_id: str,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_admin_only_user),
     db: Session = Depends(get_db)
 ):
     """Get specific Instagram account"""
@@ -340,7 +439,7 @@ def get_instagram_account(
 @api_router.delete("/instagram/accounts/{account_id}")
 def delete_instagram_account(
     account_id: str,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_admin_only_user),
     db: Session = Depends(get_db)
 ):
     """Delete/disconnect an Instagram account"""
@@ -480,7 +579,7 @@ async def handle_instagram_webhook(request: Request, db: Session = Depends(get_d
                             notify_users.add(str(chat.assigned_to))
                         
                         # Add admin users
-                        admin_users = db.query(User).filter(User.role == UserRole.ADMIN).all()
+                        admin_users = db.query(User).filter(User.role.in_([UserRole.ADMIN, UserRole.SUPERVISOR])).all()
                         notify_users.update(str(user.id) for user in admin_users)
                         
                         message_payload = MessageResponse.model_validate(new_message).model_dump(mode="json")
@@ -668,8 +767,8 @@ async def send_message(chat_id: str, message_data: MessageCreate, current_user: 
     if chat.assigned_to:
         notify_users.add(str(chat.assigned_to))
     
-    # Add admin users
-    admin_users = db.query(User).filter(User.role == UserRole.ADMIN).all()
+    # Add admin and supervisor users
+    admin_users = db.query(User).filter(User.role.in_([UserRole.ADMIN, UserRole.SUPERVISOR])).all()
     notify_users.update(str(user.id) for user in admin_users)
     
     # Broadcast message sent notification
@@ -688,7 +787,7 @@ async def send_message(chat_id: str, message_data: MessageCreate, current_user: 
 
 @api_router.get("/dashboard/stats", response_model=DashboardStats)
 def get_dashboard_stats(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    if current_user.role == UserRole.ADMIN:
+    if current_user.role in {UserRole.ADMIN, UserRole.SUPERVISOR}:
         total_chats = db.query(Chat).count()
         assigned_chats = db.query(Chat).filter(Chat.status == ChatStatus.ASSIGNED).count()
         unassigned_chats = db.query(Chat).filter(Chat.status == ChatStatus.UNASSIGNED).count()
@@ -726,7 +825,7 @@ def get_dashboard_stats(current_user: User = Depends(get_current_user), db: Sess
 @api_router.post("/facebook/pages", response_model=FacebookPageResponse)
 def connect_facebook_page(
     page_data: FacebookPageConnect,
-    current_user: User = Depends(get_admin_user),
+    current_user: User = Depends(get_admin_only_user),
     db: Session = Depends(get_db)
 ):
     """Connect a Facebook page"""
@@ -758,7 +857,7 @@ def connect_facebook_page(
 
 @api_router.get("/facebook/pages", response_model=List[FacebookPageResponse])
 def list_facebook_pages(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_admin_only_user),
     db: Session = Depends(get_db)
 ):
     """List all connected Facebook pages"""
@@ -768,7 +867,7 @@ def list_facebook_pages(
 @api_router.get("/facebook/pages/{page_id}", response_model=FacebookPageResponse)
 def get_facebook_page(
     page_id: str,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_admin_only_user),
     db: Session = Depends(get_db)
 ):
     """Get a specific Facebook page"""
@@ -781,7 +880,7 @@ def get_facebook_page(
 def update_facebook_page(
     page_id: str,
     page_update: FacebookPageUpdate,
-    current_user: User = Depends(get_admin_user),
+    current_user: User = Depends(get_admin_only_user),
     db: Session = Depends(get_db)
 ):
     """Update a Facebook page"""
@@ -806,7 +905,7 @@ def update_facebook_page(
 @api_router.delete("/facebook/pages/{page_id}")
 def delete_facebook_page(
     page_id: str,
-    current_user: User = Depends(get_admin_user),
+    current_user: User = Depends(get_admin_only_user),
     db: Session = Depends(get_db)
 ):
     """Delete a Facebook page"""

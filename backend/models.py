@@ -11,6 +11,7 @@ def utc_now():
 
 class UserRole(str, enum.Enum):
     ADMIN = "admin"
+    SUPERVISOR = "supervisor"
     AGENT = "agent"
 
 class ChatStatus(str, enum.Enum):
