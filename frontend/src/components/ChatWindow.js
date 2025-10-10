@@ -86,7 +86,7 @@ const ChatWindow = ({ agents, userRole }) => {
           </div>
         </div>
 
-        {userRole === 'admin' && (
+        {(userRole === 'admin' || userRole === 'supervisor') && (
           <div className="flex items-center space-x-2">
             <Select
               value={chat.assigned_to || 'unassigned'}

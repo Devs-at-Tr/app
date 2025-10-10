@@ -9,6 +9,7 @@ export const ChatProvider = ({ children, userRole }) => {
   const [selectedChat, setSelectedChat] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [activePlatform, setActivePlatform] = useState('all');
 
   const updateChatMessages = useCallback((chatId, newMessage) => {
     setChats(currentChats =>
@@ -68,8 +69,16 @@ export const ChatProvider = ({ children, userRole }) => {
         throw new Error('Invalid response format from server');
       }
       
-      setChats(response.data);
-      return response.data;
+      const chatsData = response.data || [];
+      setChats(chatsData);
+      setActivePlatform(platform);
+      setSelectedChat((currentChat) => {
+        if (!currentChat) {
+          return null;
+        }
+        return chatsData.find(chat => chat.id === currentChat.id) || null;
+      });
+      return chatsData;
     } catch (error) {
       console.error('Error loading chats:', error);
       const errorMessage = error.response?.data?.detail || error.message || 'Failed to load chats';
@@ -165,6 +174,7 @@ export const ChatProvider = ({ children, userRole }) => {
     selectedChat,
     loading,
     error,
+    activePlatform,
     loadChats,
     selectChat,
     sendMessage,

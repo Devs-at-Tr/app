@@ -161,7 +161,7 @@ const SocialComments = ({ selectedPlatform = 'all' }) => {
         const response = await axios.get(`${API}/${platform}/comments`, { headers });
         setComments((prev) => ({
           ...prev,
-          [platform]: normalize(response.data)
+          [platform]: normalize(response.data || [])
         }));
       }
     } catch (err) {

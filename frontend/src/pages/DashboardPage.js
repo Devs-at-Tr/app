@@ -77,7 +77,7 @@ const DashboardContent = ({ user, onLogout }) => {
       // Get stats and agents data
       const [statsRes, agentsRes] = await Promise.all([
         axios.get(`${API}/dashboard/stats`, axiosConfig),
-        user.role === 'admin' 
+        (user.role === 'admin' || user.role === 'supervisor')
           ? axios.get(`${API}/users/agents`, axiosConfig)
           : Promise.resolve({ data: [] })
       ]);
@@ -102,10 +102,7 @@ const DashboardContent = ({ user, onLogout }) => {
   const handlePlatformChange = async (platform) => {
     setSelectedPlatform(platform);
     try {
-      await Promise.all([
-        loadData(platform),
-        loadChats(platform)
-      ]);
+      await loadData(platform);
     } catch (error) {
       console.error('Error changing platform:', error);
     }
@@ -217,7 +214,7 @@ const DashboardContent = ({ user, onLogout }) => {
                   selectedChatId={selectedChat?.id}
                   onSelectChat={handleSelectChat}
                   onRefresh={loadData}
-                  userRole={user.role}
+                  selectedPlatform={selectedPlatform}
                 />
               </div>
               

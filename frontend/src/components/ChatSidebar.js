@@ -1,7 +1,5 @@
-import React, { useCallback } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { Button } from './ui/button';
-import { useChatContext } from '../context/ChatContext';
-import { useStore } from 'zustand';
 import { RefreshCw, Search, Instagram } from 'lucide-react';
 import { Input } from './ui/input';
 
@@ -11,28 +9,51 @@ const FacebookIcon = ({ className }) => (
   </svg>
 );
 
-const ChatSidebar = ({ userRole }) => {
-  const { chats, selectedChat, loadChats, selectChat } = useChatContext();
-  const [searchQuery, setSearchQuery] = React.useState('');
+const ChatSidebar = ({
+  chats = [],
+  selectedChatId,
+  onSelectChat,
+  onRefresh,
+  selectedPlatform = 'all'
+}) => {
+  const [searchQuery, setSearchQuery] = useState('');
 
-  const handleRefresh = useCallback(async () => {
-    try {
-      await loadChats();
-    } catch (error) {
-      console.error('Error refreshing chats:', error);
+  const handleRefresh = useCallback(() => {
+    onRefresh?.(selectedPlatform);
+  }, [onRefresh, selectedPlatform]);
+
+  const filteredChats = useMemo(() => {
+    const platformFiltered =
+      selectedPlatform === 'all'
+        ? chats
+        : chats.filter(chat => chat.platform === selectedPlatform.toUpperCase());
+
+    if (!searchQuery.trim()) {
+      return platformFiltered;
     }
-  }, [loadChats]);
 
-  const filteredChats = chats.filter(chat =>
-    chat.username.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+    const query = searchQuery.toLowerCase();
+    return platformFiltered.filter(chat =>
+      chat.username.toLowerCase().includes(query) ||
+      (chat.last_message || '').toLowerCase().includes(query)
+    );
+  }, [chats, selectedPlatform, searchQuery]);
 
-  const getPlatformIcon = (platform) => {
-    if (platform === 'FACEBOOK') {
-      return <FacebookIcon className="w-4 h-4 text-blue-500" />;
-    }
-    return <Instagram className="w-4 h-4 text-pink-500" />;
+  const handleSelect = (chatId) => {
+    onSelectChat?.(chatId);
   };
+
+  const isSelected = (chatId) => selectedChatId === chatId;
+
+  const getPlatformBadge = (platform) => (
+    <div className="flex items-center space-x-1">
+      {platform === 'FACEBOOK' ? (
+        <FacebookIcon className="w-4 h-4 text-blue-500" />
+      ) : (
+        <Instagram className="w-4 h-4 text-pink-500" />
+      )}
+    </div>
+  );
 
   return (
     <div className="bg-[#1a1a2e] border border-gray-800 rounded-xl h-full flex flex-col" data-testid="chat-sidebar">
@@ -73,19 +94,17 @@ const ChatSidebar = ({ userRole }) => {
           filteredChats.map((chat) => (
             <div
               key={chat.id}
-              onClick={() => selectChat(chat.id)}
+              onClick={() => handleSelect(chat.id)}
               className={`chat-item p-4 border-b border-gray-800 ${
-                selectedChat?.id === chat.id ? 'active' : ''
+                isSelected(chat.id) ? 'active' : ''
               }`}
               data-testid={`chat-item-${chat.id}`}
             >
               <div className="flex items-start justify-between">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center space-x-2 mb-1">
-                    <div className="flex items-center space-x-1">
-                      {getPlatformIcon(chat.platform)}
-                      <h3 className="text-white font-semibold truncate">{chat.username}</h3>
-                    </div>
+                    {getPlatformBadge(chat.platform)}
+                    <h3 className="text-white font-semibold truncate">{chat.username}</h3>
                     {chat.status === 'unassigned' && (
                       <span className="px-2 py-0.5 bg-orange-500/20 text-orange-400 text-xs rounded-full">
                         New

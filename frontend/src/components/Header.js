@@ -1,6 +1,7 @@
 import React from 'react';
+import { Link } from 'react-router-dom';
 import { Button } from './ui/button';
-import { MessageCircle, LogOut, User } from 'lucide-react';
+import { MessageCircle, LogOut, User, UserPlus } from 'lucide-react';
 
 const Header = ({ user, onLogout }) => {
   return (
@@ -17,6 +18,17 @@ const Header = ({ user, onLogout }) => {
         </div>
 
         <div className="flex items-center space-x-4">
+          {user.role === 'admin' && (
+            <Link to="/signup" className="hidden sm:block">
+              <Button
+                variant="outline"
+                className="bg-purple-500/10 border-purple-500/50 hover:bg-purple-500/20 text-purple-300"
+              >
+                <UserPlus className="w-4 h-4 mr-2" />
+                Create User
+              </Button>
+            </Link>
+          )}
           <div className="flex items-center space-x-2 px-4 py-2 bg-[#0f0f1a] rounded-lg border border-gray-800">
             <User className="w-4 h-4 text-purple-400" />
             <div>
