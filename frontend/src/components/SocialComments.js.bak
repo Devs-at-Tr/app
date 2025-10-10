@@ -1,0 +1,378 @@
+import React, { useState, useEffect } from 'react';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
+import { Card } from './ui/card';
+import { Avatar } from './ui/avatar';
+import { Input } from './ui/input';
+import { Button } from './ui/button';
+import { Instagram, Facebook, Reply, Send, Video, ExternalLink } from 'lucide-react';
+import { API } from '../App';
+import axios from 'axios';
+import { ScrollArea } from './ui/scroll-area';
+
+const PostPreview = ({ post, platform }) => {
+  const isVideo = post.media_type === 'VIDEO' || post.media_type === 'REEL';
+
+  return (
+    <Card className="mb-4 overflow-hidden bg-[#1a1a2e] border-gray-800">
+      <div className="p-4 border-b border-gray-800">
+        <div className="flex items-center space-x-3">
+          <Avatar>
+            <img 
+              src={post.profile_pic || `https://ui-avatars.com/api/?name=${post.username}`} 
+              alt={post.username}
+            />
+          </Avatar>
+          <div>
+            <p className="font-semibold text-white">{post.username}</p>
+            <p className="text-xs text-gray-400">{new Date(post.timestamp).toLocaleString()}</p>
+          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => window.open(post.permalink, '_blank')}
+            className="ml-auto text-gray-400 hover:text-gray-300"
+          >
+            <ExternalLink className="w-4 h-4" />
+          </Button>
+        </div>
+      </div>
+      <div className="relative aspect-square bg-black/20">
+        {isVideo ? (
+          <div className="absolute inset-0 flex items-center justify-center">
+            <Video className="w-12 h-12 text-white/50" />
+            <a 
+              href={post.permalink} 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="absolute inset-0"
+            />
+          </div>
+        ) : (
+          <img 
+            src={post.media_url} 
+            alt={post.caption || 'Post image'} 
+            className="w-full h-full object-cover"
+          />
+        )}
+      </div>
+      {post.caption && (
+        <div className="p-4 border-t border-gray-800">
+          <p className="text-sm text-gray-200">{post.caption}</p>
+        </div>
+      )}
+    </Card>
+  );
+};
+import { ScrollArea } from './ui/scroll-area';
+
+const PostPreview = ({ post, platform }) => {
+  const isVideo = post.media_type === 'VIDEO' || post.media_type === 'REEL';
+
+  return (
+    <Card className="mb-4 overflow-hidden bg-[#1a1a2e] border-gray-800">
+      <div className="p-4 border-b border-gray-800">
+        <div className="flex items-center space-x-3">
+          <Avatar>
+            <img 
+              src={post.profile_pic || `https://ui-avatars.com/api/?name=${post.username}`} 
+              alt={post.username}
+            />
+          </Avatar>
+          <div>
+            <p className="font-semibold text-white">{post.username}</p>
+            <p className="text-xs text-gray-400">{new Date(post.timestamp).toLocaleString()}</p>
+          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => window.open(post.permalink, '_blank')}
+            className="ml-auto text-gray-400 hover:text-gray-300"
+          >
+            <ExternalLink className="w-4 h-4" />
+          </Button>
+        </div>
+      </div>
+      <div className="relative aspect-square bg-black/20">
+        {isVideo ? (
+          <div className="absolute inset-0 flex items-center justify-center">
+            <Video className="w-12 h-12 text-white/50" />
+            <a 
+              href={post.permalink} 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="absolute inset-0"
+            />
+          </div>
+        ) : (
+          <img 
+            src={post.media_url} 
+            alt={post.caption || 'Post image'} 
+            className="w-full h-full object-cover"
+          />
+        )}
+      </div>
+      {post.caption && (
+        <div className="p-4 border-t border-gray-800">
+          <p className="text-sm text-gray-200">{post.caption}</p>
+        </div>
+      )}
+    </Card>
+  );
+};
+
+const CommentsList = ({ comments, onReply, platform }) => {
+  return (
+    <div className="space-y-4">
+      {comments.map((comment) => (
+        <Card key={comment.id} className="p-4 bg-[#1a1a2e] border-gray-800">
+          {comment.post && <PostPreview post={comment.post} platform={platform} />}
+          <div className="flex space-x-4">
+            <Avatar>
+              <img 
+                src={comment.profile_pic || `https://ui-avatars.com/api/?name=${comment.username}`} 
+                alt={comment.username}
+              />
+            </Avatar>
+            <div className="flex-1">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="font-semibold text-white">{comment.username}</p>
+                  <p className="text-sm text-gray-400">{new Date(comment.timestamp).toLocaleString()}</p>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => onReply(comment)}
+                  className="text-purple-400 hover:text-purple-300"
+                >
+                  <Reply className="w-4 h-4 mr-2" />
+                  Reply
+                </Button>
+              </div>
+              <p className="mt-2 text-gray-200">{comment.text}</p>
+              {comment.replies && comment.replies.length > 0 && (
+                <div className="mt-4 ml-6 space-y-4 border-l-2 border-gray-800 pl-4">
+                  {comment.replies.map((reply) => (
+                    <div key={reply.id} className="flex space-x-4">
+                      <Avatar className="w-8 h-8">
+                        <img 
+                          src={reply.profile_pic || `https://ui-avatars.com/api/?name=${reply.username}`} 
+                          alt={reply.username}
+                        />
+                      </Avatar>
+                      <div>
+                        <p className="font-semibold text-white">{reply.username}</p>
+                        <p className="text-sm text-gray-200">{reply.text}</p>
+                        <p className="text-xs text-gray-400">{new Date(reply.timestamp).toLocaleString()}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </Card>
+      ))}
+    </div>
+  );
+};
+
+const SocialComments = ({ selectedPlatform = 'all' }) => {
+  const [activeTab, setActiveTab] = useState(selectedPlatform === 'all' ? 'instagram' : selectedPlatform);
+  const [comments, setComments] = useState({ instagram: [], facebook: [] });
+  const [loading, setLoading] = useState(false);
+  const [replyTo, setReplyTo] = useState(null);
+  const [replyText, setReplyText] = useState('');
+
+  useEffect(() => {
+    if (selectedPlatform !== 'all') {
+      setActiveTab(selectedPlatform);
+    }
+    loadComments(selectedPlatform === 'all' ? activeTab : selectedPlatform);
+  }, [activeTab, selectedPlatform]);
+
+  const loadComments = async (platform) => {
+    setLoading(true);
+    try {
+      const token = localStorage.getItem('token');
+      const response = await axios.get(`${API}/${platform}/comments`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setComments(prev => ({ ...prev, [platform]: response.data }));
+    } catch (error) {
+      console.error(`Error loading ${platform} comments:`, error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleReply = async () => {
+    if (!replyTo || !replyText.trim()) return;
+
+    try {
+      const token = localStorage.getItem('token');
+      await axios.post(
+        `${API}/${activeTab}/comments/${replyTo.id}/reply`,
+        { text: replyText },
+        { headers: { Authorization: `Bearer ${token}` }}
+      );
+
+      // Reload comments to show the new reply
+      loadComments(activeTab);
+      setReplyTo(null);
+      setReplyText('');
+    } catch (error) {
+      console.error('Error sending reply:', error);
+    }
+  };
+
+  return (
+    <ScrollArea className="h-[calc(100vh-220px)]">
+      <div className="space-y-4 p-4">
+        {selectedPlatform === 'all' ? (
+          <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+            <TabsList className="w-full bg-[#1a1a2e] border-b border-gray-800">
+              <TabsTrigger value="instagram" className="flex-1">
+                <Instagram className="w-4 h-4 mr-2" />
+                Instagram Comments
+              </TabsTrigger>
+              <TabsTrigger value="facebook" className="flex-1">
+                <Facebook className="w-4 h-4 mr-2" />
+                Facebook Comments
+              </TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="instagram">
+              {loading ? (
+                <div className="flex justify-center p-8">
+                  <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-pink-500" />
+                </div>
+              ) : (
+                <CommentsList
+                  comments={comments.instagram}
+                  onReply={setReplyTo}
+                  platform="instagram"
+                />
+              )}
+            </TabsContent>
+
+            <TabsContent value="facebook">
+              {loading ? (
+                <div className="flex justify-center p-8">
+                  <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-blue-500" />
+                </div>
+              ) : (
+                <CommentsList
+                  comments={comments.facebook}
+                  onReply={setReplyTo}
+                  platform="facebook"
+                />
+              )}
+            </TabsContent>
+          </Tabs>
+        ) : (
+          loading ? (
+            <div className="flex justify-center p-8">
+              <div className={`animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 ${
+                selectedPlatform === 'facebook' ? 'border-blue-500' : 'border-pink-500'
+              }`} />
+            </div>
+          ) : (
+            <CommentsList
+              comments={comments[selectedPlatform]}
+              onReply={setReplyTo}
+                platform={selectedPlatform}
+            />
+          )
+        )}
+
+        {replyTo && (
+          <div className="fixed bottom-0 left-0 right-0 p-4 bg-[#1a1a2e] border-t border-gray-800">
+            <div className="max-w-4xl mx-auto">
+              <div className="flex items-center mb-2">
+                <p className="text-sm text-gray-400">
+                  Replying to <span className={activeTab === 'facebook' ? 'text-blue-400' : 'text-pink-400'}>{replyTo.username}</span>
+                  {replyTo.post && (
+                    <span className="ml-1 text-gray-500">
+                      on {replyTo.post.media_type.toLowerCase()}
+                    </span>
+                  )}
+                </p>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setReplyTo(null)}
+                  className="ml-2 text-gray-400 hover:text-gray-300"
+                >
+                  Cancel
+                </Button>
+              </div>
+              <div className="flex space-x-2">
+                <Input
+                  value={replyText}
+                  onChange={(e) => setReplyText(e.target.value)}
+                  placeholder="Write your reply..."
+                  className="flex-1 bg-[#0f0f1a] border-gray-700 text-white"
+                />
+                <Button
+                  onClick={handleReply}
+                  disabled={!replyText.trim()}
+                  className={activeTab === 'facebook' ? 'bg-blue-600 hover:bg-blue-700' : 'bg-pink-600 hover:bg-pink-700'}
+                >
+                  <Send className="w-4 h-4" />
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </ScrollArea>
+  );
+};
+
+export default SocialComments;      {replyTo && (
+        <div className="fixed bottom-0 left-0 right-0 p-4 bg-[#1a1a2e] border-t border-gray-800">
+          <div className="max-w-4xl mx-auto">
+            <div className="flex items-center mb-2">
+              <p className="text-sm text-gray-400">
+                Replying to <span className={activeTab === 'facebook' ? 'text-blue-400' : 'text-pink-400'}>{replyTo.username}</span>
+                {replyTo.post && (
+                  <span className="ml-1 text-gray-500">
+                    on {replyTo.post.media_type.toLowerCase()}
+                  </span>
+                )}
+              </p>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setReplyTo(null)}
+                className="ml-2 text-gray-400 hover:text-gray-300"
+              >
+                Cancel
+              </Button>
+            </div>
+            <div className="flex space-x-2">
+              <Input
+                value={replyText}
+                onChange={(e) => setReplyText(e.target.value)}
+                placeholder="Write your reply..."
+                className="flex-1 bg-[#0f0f1a] border-gray-700 text-white"
+              />
+              <Button
+                onClick={handleReply}
+                disabled={!replyText.trim()}
+                className={activeTab === 'facebook' ? 'bg-blue-600 hover:bg-blue-700' : 'bg-pink-600 hover:bg-pink-700'}
+              >
+                <Send className="w-4 h-4" />
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+      </div>
+    </ScrollArea>
+    </div>
+  );
+};
+
+export default SocialComments;
