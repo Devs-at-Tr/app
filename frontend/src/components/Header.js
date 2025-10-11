@@ -14,7 +14,7 @@ const Header = ({ user, onLogout }) => {
           />
           <div>
             <h1 className="text-xl font-bold text-white">TickleGram Dashboard</h1>
-            <p className="text-xs text-gray-400">Instagram and Facebook DM Management</p>
+            <p className="text-xs text-gray-400">DM Management</p>
           </div>
         </div>
 

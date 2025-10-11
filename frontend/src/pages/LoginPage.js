@@ -43,7 +43,7 @@ const LoginPage = ({ onLogin }) => {
             />
           </div>
           <h1 className="text-4xl font-bold text-white mb-2">TickleGram</h1>
-          <p className="text-gray-400 text-lg">Instagram DM Management</p>
+          <p className="text-gray-400 text-lg">DM Management</p>
         </div>
 
         {/* Login Card */}
