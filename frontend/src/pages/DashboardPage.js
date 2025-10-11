@@ -12,8 +12,11 @@ import PlatformSelector from '../components/PlatformSelector';
 import SocialComments from '../components/SocialComments';
 import FacebookPageManager from '../components/FacebookPageManager';
 import InstagramAccountManager from '../components/InstagramAccountManager';
+import TemplateManager from '../components/TemplateManager';
 import { Button } from '../components/ui/button';
+import { Sheet, SheetContent } from '../components/ui/sheet';
 import { Settings, Instagram } from 'lucide-react';
+import { useIsMobile } from '../hooks/useMediaQuery';
 
 const DashboardContent = ({ user, onLogout }) => {
   const { ws, lastMessage } = useWebSocketContext();
@@ -35,6 +38,8 @@ const DashboardContent = ({ user, onLogout }) => {
   const [showInstagramManager, setShowInstagramManager] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const isMobile = useIsMobile();
 
   // Handle WebSocket messages
   useEffect(() => {
@@ -112,6 +117,10 @@ const DashboardContent = ({ user, onLogout }) => {
   const handleSelectChat = async (chatId) => {
     try {
       await selectChat(chatId);
+      // Close mobile sidebar when chat is selected
+      if (isMobile) {
+        setMobileSidebarOpen(false);
+      }
     } catch (error) {
       console.error('Error selecting chat:', error);
     }
@@ -157,7 +166,11 @@ const DashboardContent = ({ user, onLogout }) => {
 
   return (
     <div className="min-h-screen bg-[#0f0f1a]" data-testid="dashboard-page">
-      <Header user={user} onLogout={onLogout} />
+      <Header 
+        user={user} 
+        onLogout={onLogout}
+        onMenuClick={() => setMobileSidebarOpen(true)}
+      />
       
       {/* Error Banner */}
       {showError && (
@@ -188,6 +201,9 @@ const DashboardContent = ({ user, onLogout }) => {
               <TabsList className="bg-[#1a1a2e] border border-gray-800 px-1 py-1 gap-1 justify-start">
                 <TabsTrigger value="chats" className="px-4 py-1.5 text-sm">Direct Messages</TabsTrigger>
                 <TabsTrigger value="comments" className="px-4 py-1.5 text-sm">Comments</TabsTrigger>
+                {user.role === 'admin' && (
+                  <TabsTrigger value="templates" className="px-4 py-1.5 text-sm">Templates</TabsTrigger>
+                )}
               </TabsList>
             </div>
 
@@ -216,28 +232,66 @@ const DashboardContent = ({ user, onLogout }) => {
           </div>
 
           <TabsContent value="chats">
-            <div className="grid grid-cols-12 gap-6 h-[calc(100vh-360px)]">
-              <div className="col-span-4 h-full min-h-0 flex flex-col">
-                <ChatSidebar
-                  chats={chats}
-                  selectedChatId={selectedChat?.id}
-                  onSelectChat={handleSelectChat}
-                  onRefresh={loadData}
-                  selectedPlatform={selectedPlatform}
-                  loading={chatsLoading}
-                />
+            {/* Mobile Layout */}
+            {isMobile ? (
+              <div className="h-[calc(100vh-280px)]">
+                {/* Mobile Sidebar Drawer */}
+                <Sheet open={mobileSidebarOpen} onOpenChange={setMobileSidebarOpen}>
+                  <SheetContent side="left" className="bg-[#1a1a2e] border-gray-700 p-0 w-[85vw] sm:w-[400px]">
+                    <div className="h-full flex flex-col">
+                      <div className="p-4 border-b border-gray-700">
+                        <h3 className="text-lg font-semibold text-white">Chats</h3>
+                      </div>
+                      <div className="flex-1 overflow-hidden">
+                        <ChatSidebar
+                          chats={chats}
+                          selectedChatId={selectedChat?.id}
+                          onSelectChat={handleSelectChat}
+                          onRefresh={loadData}
+                          selectedPlatform={selectedPlatform}
+                          loading={chatsLoading}
+                        />
+                      </div>
+                    </div>
+                  </SheetContent>
+                </Sheet>
+
+                {/* Mobile Chat Window - Full Screen */}
+                <div className="h-full">
+                  <ChatWindow
+                    chat={selectedChat}
+                    onSendMessage={handleSendMessage}
+                    onAssignChat={handleAssignChat}
+                    agents={agents}
+                    userRole={user.role}
+                  />
+                </div>
               </div>
-              
-              <div className="col-span-8 h-full min-h-0 flex">
-                <ChatWindow
-                  chat={selectedChat}
-                  onSendMessage={handleSendMessage}
-                  onAssignChat={handleAssignChat}
-                  agents={agents}
-                  userRole={user.role}
-                />
+            ) : (
+              /* Desktop Layout */
+              <div className="grid grid-cols-12 gap-6 h-[calc(100vh-360px)]">
+                <div className="col-span-4 lg:col-span-3 h-full min-h-0 flex flex-col">
+                  <ChatSidebar
+                    chats={chats}
+                    selectedChatId={selectedChat?.id}
+                    onSelectChat={handleSelectChat}
+                    onRefresh={loadData}
+                    selectedPlatform={selectedPlatform}
+                    loading={chatsLoading}
+                  />
+                </div>
+                
+                <div className="col-span-8 lg:col-span-9 h-full min-h-0 flex">
+                  <ChatWindow
+                    chat={selectedChat}
+                    onSendMessage={handleSendMessage}
+                    onAssignChat={handleAssignChat}
+                    agents={agents}
+                    userRole={user.role}
+                  />
+                </div>
               </div>
-            </div>
+            )}
           </TabsContent>
 
           <TabsContent value="comments">
@@ -245,6 +299,14 @@ const DashboardContent = ({ user, onLogout }) => {
               <SocialComments selectedPlatform={selectedPlatform === 'all' ? 'all' : selectedPlatform} />
             </div>
           </TabsContent>
+
+          {user.role === 'admin' && (
+            <TabsContent value="templates">
+              <div className="h-[calc(100vh-380px)] overflow-y-auto">
+                <TemplateManager />
+              </div>
+            </TabsContent>
+          )}
         </Tabs>
       </div>
 

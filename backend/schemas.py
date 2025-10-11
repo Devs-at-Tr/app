@@ -136,3 +136,43 @@ class FacebookPageUpdate(BaseModel):
     page_name: Optional[str] = None
     access_token: Optional[str] = None
     is_active: Optional[bool] = None
+
+# Template Schemas
+class MessageTemplateCreate(BaseModel):
+    name: str
+    content: str
+    category: str  # greeting, utility, marketing, support, closing
+    platform: MessagePlatform
+    meta_template_id: Optional[str] = None
+    is_meta_approved: bool = False
+
+class MessageTemplateUpdate(BaseModel):
+    name: Optional[str] = None
+    content: Optional[str] = None
+    category: Optional[str] = None
+    platform: Optional[MessagePlatform] = None
+    meta_template_id: Optional[str] = None
+    is_meta_approved: Optional[bool] = None
+
+class MessageTemplateResponse(BaseModel):
+    id: str
+    name: str
+    content: str
+    category: str
+    platform: MessagePlatform
+    meta_template_id: Optional[str]
+    is_meta_approved: bool
+    created_by: str
+    created_at: datetime
+    updated_at: datetime
+    
+    class Config:
+        from_attributes = True
+        
+    def model_post_init(self, _):
+        self.created_at = convert_to_ist(self.created_at)
+        self.updated_at = convert_to_ist(self.updated_at)
+
+class TemplateSendRequest(BaseModel):
+    chat_id: str
+    variables: Optional[dict] = {}  # For variable substitution like {name}, {order_id}

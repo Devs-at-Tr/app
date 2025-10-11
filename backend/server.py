@@ -11,14 +11,15 @@ import random
 from datetime import datetime, timezone, timedelta
 
 from database import engine, get_db, Base
-from models import User, InstagramAccount, Chat, Message, UserRole, ChatStatus, MessageSender, MessageType, FacebookPage, MessagePlatform
+from models import User, InstagramAccount, Chat, Message, UserRole, ChatStatus, MessageSender, MessageType, FacebookPage, MessagePlatform, MessageTemplate
 from schemas import (
     UserRegister, UserLogin, UserResponse, TokenResponse,
     InstagramConnect, InstagramAccountResponse,
     MessageCreate, MessageResponse,
     ChatAssign, ChatResponse, ChatWithMessages,
     DashboardStats,
-    FacebookPageConnect, FacebookPageResponse, FacebookPageUpdate
+    FacebookPageConnect, FacebookPageResponse, FacebookPageUpdate,
+    MessageTemplateCreate, MessageTemplateUpdate, MessageTemplateResponse, TemplateSendRequest
 )
 from auth import verify_password, get_password_hash, create_access_token, decode_access_token
 from facebook_api import facebook_client, FacebookMode
@@ -680,6 +681,24 @@ def assign_chat(chat_id: str, assignment: ChatAssign, current_user: User = Depen
     logger.info(f"Chat {chat_id} assigned to {assignment.agent_id or 'unassigned'}")
     return {"success": True, "chat": ChatResponse.model_validate(chat)}
 
+@api_router.post("/chats/{chat_id}/mark_read")
+def mark_chat_as_read(chat_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Mark a chat as read by resetting unread count"""
+    chat = db.query(Chat).filter(Chat.id == chat_id).first()
+    if not chat:
+        raise HTTPException(status_code=404, detail="Chat not found")
+    
+    # Check access - agents can only mark their assigned chats, admins can mark any
+    if current_user.role == UserRole.AGENT and chat.assigned_to != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    # Reset unread count
+    chat.unread_count = 0
+    db.commit()
+    
+    logger.info(f"Chat {chat_id} marked as read by user {current_user.id}")
+    return {"success": True, "chat_id": chat_id}
+
 @api_router.post("/chats/{chat_id}/message", response_model=MessageResponse)
 async def send_message(chat_id: str, message_data: MessageCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     chat = db.query(Chat).filter(Chat.id == chat_id).first()
@@ -923,6 +942,219 @@ def delete_facebook_page(
     
     logger.info(f"Deleted Facebook page: {page_id}")
     return {"success": True, "message": "Facebook page deleted"}
+
+# Template Endpoints
+@api_router.get("/templates", response_model=List[MessageTemplateResponse])
+def list_templates(
+    platform: Optional[MessagePlatform] = None,
+    category: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get all templates with optional filtering by platform and category"""
+    query = db.query(MessageTemplate)
+    
+    if platform:
+        query = query.filter(MessageTemplate.platform == platform)
+    if category:
+        query = query.filter(MessageTemplate.category == category)
+    
+    templates = query.order_by(MessageTemplate.created_at.desc()).all()
+    return templates
+
+@api_router.post("/templates", response_model=MessageTemplateResponse)
+def create_template(
+    template_data: MessageTemplateCreate,
+    current_user: User = Depends(get_admin_only_user),
+    db: Session = Depends(get_db)
+):
+    """Create a new template (admin only)"""
+    new_template = MessageTemplate(
+        name=template_data.name,
+        content=template_data.content,
+        category=template_data.category,
+        platform=template_data.platform,
+        meta_template_id=template_data.meta_template_id,
+        is_meta_approved=template_data.is_meta_approved,
+        created_by=current_user.id
+    )
+    db.add(new_template)
+    db.commit()
+    db.refresh(new_template)
+    
+    logger.info(f"Template created: {new_template.id} by user {current_user.email}")
+    return new_template
+
+@api_router.put("/templates/{template_id}", response_model=MessageTemplateResponse)
+def update_template(
+    template_id: str,
+    template_data: MessageTemplateUpdate,
+    current_user: User = Depends(get_admin_only_user),
+    db: Session = Depends(get_db)
+):
+    """Update a template (admin only)"""
+    template = db.query(MessageTemplate).filter(MessageTemplate.id == template_id).first()
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+    
+    if template_data.name is not None:
+        template.name = template_data.name
+    if template_data.content is not None:
+        template.content = template_data.content
+    if template_data.category is not None:
+        template.category = template_data.category
+    if template_data.platform is not None:
+        template.platform = template_data.platform
+    if template_data.meta_template_id is not None:
+        template.meta_template_id = template_data.meta_template_id
+    if template_data.is_meta_approved is not None:
+        template.is_meta_approved = template_data.is_meta_approved
+    
+    template.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(template)
+    
+    logger.info(f"Template updated: {template_id} by user {current_user.email}")
+    return template
+
+@api_router.delete("/templates/{template_id}")
+def delete_template(
+    template_id: str,
+    current_user: User = Depends(get_admin_only_user),
+    db: Session = Depends(get_db)
+):
+    """Delete a template (admin only)"""
+    template = db.query(MessageTemplate).filter(MessageTemplate.id == template_id).first()
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+    
+    db.delete(template)
+    db.commit()
+    
+    logger.info(f"Template deleted: {template_id} by user {current_user.email}")
+    return {"success": True, "message": "Template deleted"}
+
+@api_router.post("/templates/{template_id}/send", response_model=MessageResponse)
+async def send_template(
+    template_id: str,
+    send_request: TemplateSendRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Send a template message to a chat"""
+    # Get template
+    template = db.query(MessageTemplate).filter(MessageTemplate.id == template_id).first()
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+    
+    # Get chat
+    chat = db.query(Chat).filter(Chat.id == send_request.chat_id).first()
+    if not chat:
+        raise HTTPException(status_code=404, detail="Chat not found")
+    
+    # Check access
+    if current_user.role == UserRole.AGENT and chat.assigned_to != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    # Check platform match
+    if template.platform != chat.platform:
+        raise HTTPException(status_code=400, detail=f"Template platform ({template.platform}) doesn't match chat platform ({chat.platform})")
+    
+    # Perform variable substitution
+    message_content = template.content
+    if send_request.variables:
+        for key, value in send_request.variables.items():
+            placeholder = f"{{{key}}}"
+            message_content = message_content.replace(placeholder, str(value))
+    
+    # Auto-populate common variables from chat context
+    message_content = message_content.replace("{username}", chat.username)
+    message_content = message_content.replace("{platform}", chat.platform.value)
+    
+    # TODO: For Meta-approved templates (is_meta_approved=True), use Facebook's Template API
+    # For now, we send as regular messages (simulated approach)
+    
+    # Send the message using the existing send_message logic
+    message_data = MessageCreate(content=message_content, message_type=MessageType.TEXT)
+    
+    # Reuse send_message logic
+    if instagram_client.mode == InstagramMode.MOCK and facebook_client.mode == FacebookMode.MOCK:
+        new_message = Message(
+            chat_id=chat.id,
+            sender=MessageSender.AGENT,
+            content=message_content,
+            message_type=MessageType.TEXT,
+            platform=chat.platform
+        )
+        db.add(new_message)
+        chat.last_message = message_content
+        chat.updated_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(new_message)
+        logger.info(f"Template message sent (mock mode) in chat {chat.id}")
+    else:
+        # Send through appropriate platform
+        if chat.platform == MessagePlatform.FACEBOOK:
+            if chat.facebook_page_id:
+                fb_page = db.query(FacebookPage).filter(FacebookPage.page_id == chat.facebook_page_id).first()
+                if fb_page and fb_page.is_active:
+                    result = await facebook_client.send_text_message(
+                        page_access_token=fb_page.access_token,
+                        recipient_id=chat.instagram_user_id,
+                        text=message_content
+                    )
+                    if not result.get("success"):
+                        raise HTTPException(status_code=500, detail=f"Failed to send message: {result.get('error')}")
+                else:
+                    raise HTTPException(status_code=400, detail="Facebook page not found or inactive")
+            else:
+                raise HTTPException(status_code=400, detail="No Facebook page associated with this chat")
+        
+        elif chat.platform == MessagePlatform.INSTAGRAM:
+            if chat.facebook_page_id:
+                ig_account = db.query(InstagramAccount).filter(InstagramAccount.page_id == chat.facebook_page_id).first()
+                if ig_account:
+                    result = await instagram_client.send_text_message(
+                        page_access_token=ig_account.access_token,
+                        recipient_id=chat.instagram_user_id,
+                        text=message_content
+                    )
+                    if not result.get("success"):
+                        raise HTTPException(status_code=500, detail=f"Failed to send message: {result.get('error')}")
+                else:
+                    raise HTTPException(status_code=400, detail="Instagram account not found")
+            else:
+                raise HTTPException(status_code=400, detail="No Instagram account associated with this chat")
+        
+        new_message = Message(
+            chat_id=chat.id,
+            sender=MessageSender.AGENT,
+            content=message_content,
+            message_type=MessageType.TEXT,
+            platform=chat.platform
+        )
+        db.add(new_message)
+        chat.last_message = message_content
+        chat.updated_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(new_message)
+    
+    # Broadcast via WebSocket
+    message_payload = MessageResponse.model_validate(new_message).model_dump(mode="json")
+    notify_users = set()
+    if chat.assigned_to:
+        notify_users.add(str(chat.assigned_to))
+    admin_users = db.query(User).filter(User.role == UserRole.ADMIN).all()
+    notify_users.update(str(user.id) for user in admin_users)
+    
+    await ws_manager.broadcast_to_users(notify_users, {
+        "type": "new_message",
+        "chat_id": chat.id,
+        "message": message_payload
+    })
+    
+    logger.info(f"Template {template_id} sent to chat {chat.id}")
+    return new_message
 
 # Facebook Webhook Endpoints
 @api_router.get("/webhooks/facebook")
