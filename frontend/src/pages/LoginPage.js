@@ -5,7 +5,6 @@ import { API } from '../App';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
-import { MessageCircle } from 'lucide-react';
 
 const LoginPage = ({ onLogin }) => {
   const [email, setEmail] = useState('');
@@ -37,9 +36,11 @@ const LoginPage = ({ onLogin }) => {
         {/* Logo & Header */}
         <div className="text-center mb-8" data-testid="login-header">
           <div className="flex justify-center mb-4">
-            <div className="bg-gradient-to-r from-purple-600 to-pink-600 p-4 rounded-2xl shadow-2xl">
-              <MessageCircle className="w-12 h-12 text-white" />
-            </div>
+            <img
+              src="/favicon.png"
+              alt="TickleGram logo"
+              className="w-16 h-16 rounded-2xl shadow-2xl"
+            />
           </div>
           <h1 className="text-4xl font-bold text-white mb-2">TickleGram</h1>
           <p className="text-gray-400 text-lg">Instagram DM Management</p>
@@ -95,13 +96,13 @@ const LoginPage = ({ onLogin }) => {
           </form>
 
           {/* Demo Credentials */}
-          <div className="mt-6 p-4 bg-purple-500/10 border border-purple-500/30 rounded-lg">
+          {/* <div className="mt-6 p-4 bg-purple-500/10 border border-purple-500/30 rounded-lg">
             <p className="text-sm text-gray-400 mb-2 font-semibold">Demo Credentials:</p>
             <div className="text-xs text-gray-500 space-y-1">
               <p>Admin: admin@ticklegram.com / admin123</p>
               <p>Agent: agent1@ticklegram.com / agent123</p>
             </div>
-          </div>
+          </div> */}
 
           {/* Signup Link */}
           <div className="mt-6 text-center">

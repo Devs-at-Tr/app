@@ -19,6 +19,11 @@ const ChatSidebar = ({
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
 
+  const totalUnread = useMemo(
+    () => chats.reduce((count, chat) => count + (chat.unread_count || 0), 0),
+    [chats]
+  );
+
   const handleRefresh = useCallback(() => {
     onRefresh?.(selectedPlatform);
   }, [onRefresh, selectedPlatform]);
@@ -61,7 +66,14 @@ const ChatSidebar = ({
       {/* Header */}
       <div className="p-4 border-b border-gray-800">
         <div className="flex items-center justify-between mb-3">
-          <h2 className="text-lg font-bold text-white">Recent Chats</h2>
+          <div className="flex items-center space-x-2">
+            <h2 className="text-lg font-bold text-white">Recent Chats</h2>
+            {totalUnread > 0 && (
+              <span className="px-2 py-0.5 bg-purple-500 text-xs font-semibold text-white rounded-full" data-testid="chat-unread-count">
+                {totalUnread}
+              </span>
+            )}
+          </div>
           <Button
             onClick={handleRefresh}
             size="sm"
@@ -103,6 +115,8 @@ const ChatSidebar = ({
               onClick={() => handleSelect(chat.id)}
               className={`chat-item p-4 border-b border-gray-800 ${
                 isSelected(chat.id) ? 'active' : ''
+              } ${
+                chat.unread_count > 0 && !isSelected(chat.id) ? 'has-unread' : ''
               }`}
               data-testid={`chat-item-${chat.id}`}
             >
@@ -111,13 +125,8 @@ const ChatSidebar = ({
                   <div className="flex items-center space-x-2 mb-1">
                     {getPlatformBadge(chat.platform)}
                     <h3 className="text-white font-semibold truncate">{chat.username}</h3>
-                    {chat.status === 'unassigned' && (
-                      <span className="px-2 py-0.5 bg-orange-500/20 text-orange-400 text-xs rounded-full">
-                        New
-                      </span>
-                    )}
                     {chat.unread_count > 0 && (
-                      <span className="px-2 py-0.5 bg-purple-500 text-white text-xs rounded-full">
+                      <span className="px-2 py-0.5 bg-purple-500 text-white text-xs font-semibold rounded-full">
                         {chat.unread_count}
                       </span>
                     )}

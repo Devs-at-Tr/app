@@ -5,7 +5,6 @@ import { API } from '../App';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
-import { MessageCircle } from 'lucide-react';
 
 const SignupPage = () => {
   const navigate = useNavigate();
@@ -70,9 +69,11 @@ const SignupPage = () => {
         {/* Logo & Header */}
         <div className="text-center mb-8">
           <div className="flex justify-center mb-4">
-            <div className="bg-gradient-to-r from-purple-600 to-pink-600 p-4 rounded-2xl shadow-2xl">
-              <MessageCircle className="w-12 h-12 text-white" />
-            </div>
+            <img
+              src="/favicon.png"
+              alt="TickleGram logo"
+              className="w-16 h-16 rounded-2xl shadow-2xl"
+            />
           </div>
           <h1 className="text-4xl font-bold text-white mb-2">TickleGram</h1>
           <p className="text-gray-400 text-lg">Create Your Agent Account</p>

@@ -1,8 +1,39 @@
-import React, { createContext, useContext, useState, useCallback } from 'react';
+import React, { createContext, useContext, useState, useCallback, useRef } from 'react';
 import axios from 'axios';
 import { API } from '../App';
 
 const ChatContext = createContext(null);
+
+const toTimestamp = (value) => {
+  if (!value) {
+    return null;
+  }
+  const time = new Date(value).getTime();
+  return Number.isNaN(time) ? null : time;
+};
+
+const getChatActivityTime = (chat) => {
+  if (!chat) {
+    return 0;
+  }
+  const candidates = [
+    chat.last_message_timestamp,
+    chat.updated_at,
+    chat.created_at
+  ];
+
+  for (const candidate of candidates) {
+    const timestamp = toTimestamp(candidate);
+    if (timestamp !== null) {
+      return timestamp;
+    }
+  }
+
+  return 0;
+};
+
+const sortChatsByRecency = (chatList = []) =>
+  [...chatList].sort((a, b) => getChatActivityTime(b) - getChatActivityTime(a));
 
 export const ChatProvider = ({ children, userRole }) => {
   const [chats, setChats] = useState([]);
@@ -10,26 +41,48 @@ export const ChatProvider = ({ children, userRole }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [activePlatform, setActivePlatform] = useState('all');
+  const activePlatformRef = useRef('all');
+  const loadChatsRef = useRef(null);
 
-  const updateChatMessages = useCallback((chatId, newMessage) => {
+  const updateChatMessages = useCallback((chatId, newMessage, options = {}) => {
+    const { chatExists = true } = options;
+    const isAgentMessage = newMessage.sender === 'agent';
+    const isActiveChat = selectedChat?.id === chatId;
+
     setChats(currentChats =>
-      currentChats.map(chat => {
-        if (chat.id !== chatId) {
-          return chat;
-        }
+      chatExists
+        ? sortChatsByRecency(
+            currentChats.map(chat => {
+              if (chat.id !== chatId) {
+                return chat;
+              }
 
-        const existingMessages = chat.messages || [];
-        if (existingMessages.some(message => message.id === newMessage.id)) {
-          return chat;
-        }
+              const existingMessages = chat.messages || [];
+              const alreadyExists = existingMessages.some(message => message.id === newMessage.id);
+              const nextMessages = alreadyExists ? existingMessages : [...existingMessages, newMessage];
 
-        return {
-          ...chat,
-          messages: [...existingMessages, newMessage],
-          last_message: newMessage.content,
-          last_message_timestamp: newMessage.timestamp
-        };
-      })
+              let unreadCount = chat.unread_count || 0;
+              if (isAgentMessage) {
+                unreadCount = 0;
+              } else {
+                if (isActiveChat) {
+                  unreadCount = 0;
+                } else if (!alreadyExists) {
+                  unreadCount += 1;
+                }
+              }
+
+              return {
+                ...chat,
+                messages: nextMessages,
+                last_message: newMessage.content,
+                last_message_timestamp: newMessage.timestamp || chat.last_message_timestamp,
+                unread_count: unreadCount,
+                status: isAgentMessage ? 'assigned' : chat.status
+              };
+            })
+          )
+        : sortChatsByRecency(currentChats)
     );
 
     setSelectedChat(currentChat => {
@@ -38,16 +91,19 @@ export const ChatProvider = ({ children, userRole }) => {
       }
 
       const existingMessages = currentChat.messages || [];
-      if (existingMessages.some(message => message.id === newMessage.id)) {
-        return currentChat;
-      }
+      const alreadyExists = existingMessages.some(message => message.id === newMessage.id);
+      const nextMessages = alreadyExists ? existingMessages : [...existingMessages, newMessage];
 
       return {
         ...currentChat,
-        messages: [...existingMessages, newMessage]
+        messages: nextMessages,
+        last_message: newMessage.content,
+        last_message_timestamp: newMessage.timestamp || currentChat.last_message_timestamp,
+        unread_count: 0,
+        status: isAgentMessage ? 'assigned' : currentChat.status
       };
     });
-  }, []);
+  }, [selectedChat]);
 
   const loadChats = useCallback(async (platform = 'all') => {
     setLoading(true);
@@ -70,8 +126,9 @@ export const ChatProvider = ({ children, userRole }) => {
       }
       
       const chatsData = response.data || [];
-      setChats(chatsData);
+      setChats(sortChatsByRecency(chatsData));
       setActivePlatform(platform);
+      activePlatformRef.current = platform; // Update ref
       setSelectedChat((currentChat) => {
         if (!currentChat) {
           return null;
@@ -89,19 +146,15 @@ export const ChatProvider = ({ children, userRole }) => {
     }
   }, []);
 
+  // Store loadChats in ref for use in handleWebSocketMessage
+  loadChatsRef.current = loadChats;
+
   const selectChat = useCallback(async (chatId) => {
     try {
       const token = localStorage.getItem('token');
       if (!token) throw new Error('No authentication token found');
 
       const headers = { Authorization: `Bearer ${token}` };
-      
-      // First check if the chat exists in our current list
-      const existingChat = chats.find(chat => chat.id === chatId);
-      if (!existingChat) {
-        console.warn('Chat not found in current list, refreshing chats...');
-        await loadChats();
-      }
       
       const response = await axios.get(`${API}/chats/${chatId}`, { headers });
       
@@ -165,9 +218,77 @@ export const ChatProvider = ({ children, userRole }) => {
 
   const handleWebSocketMessage = useCallback((data) => {
     if (data.type === 'new_message') {
-      updateChatMessages(data.chat_id, data.message);
+      // Use functional updates to avoid dependencies on chats
+      setChats(currentChats => {
+        const chatExists = currentChats.some(chat => chat.id === data.chat_id);
+        
+        if (!chatExists) {
+          // If chat doesn't exist, we need to reload
+          // Use setTimeout to avoid state update during render
+          setTimeout(() => {
+            if (loadChatsRef.current) {
+              loadChatsRef.current(activePlatformRef.current);
+            }
+          }, 0);
+          return currentChats;
+        }
+        
+        // Chat exists, update it
+        const isAgentMessage = data.message.sender === 'agent';
+        
+        return sortChatsByRecency(
+          currentChats.map(chat => {
+            if (chat.id !== data.chat_id) {
+              return chat;
+            }
+
+            const existingMessages = chat.messages || [];
+            const alreadyExists = existingMessages.some(message => message.id === data.message.id);
+            const nextMessages = alreadyExists ? existingMessages : [...existingMessages, data.message];
+
+            let unreadCount = chat.unread_count || 0;
+            if (isAgentMessage) {
+              unreadCount = 0;
+            } else {
+              // Only increment if not already exists and not viewing this chat
+              if (!alreadyExists) {
+                unreadCount += 1;
+              }
+            }
+
+            return {
+              ...chat,
+              messages: nextMessages,
+              last_message: data.message.content,
+              last_message_timestamp: data.message.timestamp || chat.last_message_timestamp,
+              unread_count: unreadCount,
+              status: isAgentMessage ? 'assigned' : chat.status
+            };
+          })
+        );
+      });
+      
+      // Update selected chat if it's the one receiving the message
+      setSelectedChat(currentChat => {
+        if (currentChat?.id !== data.chat_id) {
+          return currentChat;
+        }
+
+        const existingMessages = currentChat.messages || [];
+        const alreadyExists = existingMessages.some(message => message.id === data.message.id);
+        const nextMessages = alreadyExists ? existingMessages : [...existingMessages, data.message];
+
+        return {
+          ...currentChat,
+          messages: nextMessages,
+          last_message: data.message.content,
+          last_message_timestamp: data.message.timestamp || currentChat.last_message_timestamp,
+          unread_count: 0,
+          status: data.message.sender === 'agent' ? 'assigned' : currentChat.status
+        };
+      });
     }
-  }, [updateChatMessages]);
+  }, []);
 
   const value = {
     chats,

@@ -36,3 +36,42 @@
     transform: translateY(0);
   }
 }
+
+/* Chat Item Styles */
+.chat-item {
+  cursor: pointer;
+  transition: all 0.2s ease;
+  background-color: transparent;
+}
+
+.chat-item:hover {
+  background-color: rgba(139, 92, 246, 0.1);
+}
+
+.chat-item.active {
+  background-color: rgba(139, 92, 246, 0.2);
+  border-left: 3px solid #8b5cf6;
+}
+
+.chat-item.has-unread {
+  background-color: rgba(139, 92, 246, 0.05);
+  border-left: 3px solid #a78bfa;
+}
+
+.chat-item.has-unread:hover {
+  background-color: rgba(139, 92, 246, 0.15);
+}
+
+/* Notification Badge Animation */
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
+
+.chat-item.has-unread .badge {
+  animation: pulse 2s ease-in-out infinite;
+}

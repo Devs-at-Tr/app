@@ -1,18 +1,20 @@
 import React from 'react';
 import { Button } from './ui/button';
-import { MessageCircle, LogOut, User } from 'lucide-react';
+import { LogOut, User } from 'lucide-react';
 
 const Header = ({ user, onLogout }) => {
   return (
     <header className="bg-[#1a1a2e] border-b border-gray-800 sticky top-0 z-50" data-testid="dashboard-header">
       <div className="px-6 py-4 flex items-center justify-between">
-        <div className="flex items-center space-x-3">
-          <div className="bg-gradient-to-r from-purple-600 to-pink-600 p-2 rounded-lg">
-            <MessageCircle className="w-6 h-6 text-white" />
-          </div>
+        <div className="flex items-center space-x-3" data-testid="header-branding">
+          <img
+            src="/favicon.png"
+            alt="TickleGram logo"
+            className="w-10 h-10 rounded-lg"
+          />
           <div>
             <h1 className="text-xl font-bold text-white">TickleGram Dashboard</h1>
-            <p className="text-xs text-gray-400">Instagram DM Management</p>
+            <p className="text-xs text-gray-400">Instagram and Facebook DM Management</p>
           </div>
         </div>
 
