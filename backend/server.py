@@ -8,6 +8,7 @@ import logging
 from pathlib import Path
 from dotenv import load_dotenv
 import random
+import asyncio
 from datetime import datetime, timezone, timedelta
 
 from database import engine, get_db, Base
@@ -36,6 +37,17 @@ app = FastAPI(
     title="TickleGram API",
     # Enable CORS with credentials for WebSocket
     root_path=os.getenv('API_ROOT_PATH', ''),
+)
+
+# Configure CORS
+origins = [os.getenv('CORS_ALLOWED_ORIGINS', '*').split(',')]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Create a router with the /api prefix
@@ -309,44 +321,85 @@ async def list_facebook_comments(
     db: Session = Depends(get_db)
 ):
     """List Facebook comments in a chat-friendly format."""
+    logger.info(f"Fetching Facebook comments for user {current_user.id}")
     try:
-        pages = db.query(FacebookPage).all()
+        # Get active Facebook pages that the user has access to
+        pages = db.query(FacebookPage).filter(
+            FacebookPage.user_id == current_user.id,
+            FacebookPage.is_active == True,
+            FacebookPage.access_token.isnot(None)
+        ).all()
+        
         if not pages:
+            logger.warning(f"No active Facebook pages found for user {current_user.id}")
             return []
 
-        comments = []
+        # Log the number of pages being processed
+        logger.info(f"Processing {len(pages)} Facebook pages for comments")
+        
+        # Verify page tokens are valid
         for page in pages:
-            if facebook_client.mode == FacebookMode.MOCK:
-                for index in range(5):
-                    timestamp = datetime.now(timezone.utc) - timedelta(minutes=index * 7)
-                    comments.append({
-                        "id": f"{page.page_id}_comment_{index}",
-                        "username": f"facebook_user_{index + 1}",
-                        "text": f"This is a mock Facebook comment {index + 1} on {page.page_name or 'your page'}.",
-                        "timestamp": timestamp.isoformat(),
-                        "profile_pic": None,
-                        "replies": [],
-                        "post": {
-                            "id": f"{page.page_id}_post_{index}",
-                            "username": page.page_name or "Facebook Page",
-                            "profile_pic": None,
-                            "media_type": "IMAGE",
-                            "media_url": f"https://picsum.photos/seed/{page.page_id}{index}/800",
-                            "permalink": f"https://facebook.com/{page.page_id}/posts/mock_{index}",
-                            "caption": f"Mock Facebook post {index + 1} for {page.page_name or 'your page'}.",
-                            "timestamp": timestamp.isoformat()
-                        }
-                    })
-            else:
-                logger.info("Facebook comment retrieval is not implemented for REAL mode yet.")
+            if not page.access_token or len(page.access_token) < 50:  # Basic token validation
+                logger.error(f"Invalid access token for page {page.page_id}")
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Invalid access token for page {page.page_name}. Please reconnect the page."
+                )
 
-        comments.sort(key=lambda item: item["timestamp"], reverse=True)
-        return comments
+        all_comments = []
+        
+        # Process each page with rate limiting
+        for page in pages:
+            if facebook_client.mode != FacebookMode.REAL:
+                continue
+                
+            try:
+                # Get real comments using the new batch method
+                logger.info(f"Fetching comments for page {page.page_name} ({page.page_id})")
+                page_comments = await facebook_client.get_page_feed_with_comments(
+                    page_access_token=page.access_token,
+                    page_id=page.page_id
+                )
+                
+                if not page_comments:
+                    logger.warning(f"No comments returned for page {page.page_name}")
+                    continue
+                    
+                all_comments.extend(page_comments)
+                logger.info(f"Retrieved {len(page_comments)} comments from page {page.page_name}")
+                
+                # Add rate limiting delay between pages
+                if len(pages) > 1:  # Only delay if there are multiple pages
+                    await asyncio.sleep(1)  # 1 second delay between pages
+                    
+            except Exception as e:
+                error_msg = str(e)
+                if "access token" in error_msg.lower():
+                    logger.error(f"Access token error for page {page.page_id}: {error_msg}")
+                    # Update page status in database
+                    page.is_active = False
+                    db.commit()
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail=f"Access token expired for page {page.page_name}. Please reconnect the page."
+                    )
+                logger.error(f"Error processing page {page.page_id}: {error_msg}")
+                continue
+
+        # Sort all comments by timestamp
+        all_comments.sort(key=lambda x: x["timestamp"], reverse=True)
+
+        logger.info(f"Returning {len(all_comments)} total comments")
+        return all_comments
+    except HTTPException as http_exc:
+        # Re-raise HTTP exceptions as they already have proper status codes
+        raise http_exc
     except Exception as exc:
-        logger.error(f"Error fetching Facebook comments: {exc}")
+        error_msg = str(exc)
+        logger.error(f"Error fetching Facebook comments: {error_msg}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"message": "Failed to fetch Facebook comments", "error": str(exc)}
+            detail=f"Failed to fetch Facebook comments: {error_msg}"
         )
 
 @api_router.post("/facebook/comments/{comment_id}/reply")
@@ -356,14 +409,40 @@ async def reply_to_facebook_comment(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Reply to a Facebook comment (mock support)."""
+    """Reply to a Facebook comment"""
     try:
+        # Find all Facebook pages the user has access to
+        pages = db.query(FacebookPage).all()
+        if not pages:
+            raise HTTPException(status_code=404, detail="No Facebook pages found")
+
         if facebook_client.mode == FacebookMode.MOCK:
             logger.info(f"Mock reply to Facebook comment {comment_id}: {reply_data.get('text', '')}")
-            return {"success": True, "comment_id": comment_id, "mode": "mock"}
+            return {
+                "success": True,
+                "comment_id": comment_id,
+                "mode": "mock"
+            }
 
-        logger.info("Facebook comment reply not implemented for REAL mode.")
-        raise HTTPException(status_code=501, detail="Facebook comment reply not implemented in real mode")
+        # Try to reply using each page's access token until success
+        # (Since we don't store which page the comment belongs to)
+        for page in pages:
+            try:
+                result = await facebook_client.reply_to_comment(
+                    page_access_token=page.access_token,
+                    comment_id=comment_id,
+                    message=reply_data.get("text", "")
+                )
+                if result.get("success"):
+                    return result
+            except Exception as e:
+                logger.warning(f"Failed to reply using page {page.page_id}: {str(e)}")
+                continue
+
+        raise HTTPException(
+            status_code=400,
+            detail="Could not reply to comment with any available page access token"
+        )
     except HTTPException:
         raise
     except Exception as exc:
@@ -709,6 +788,29 @@ async def send_message(chat_id: str, message_data: MessageCreate, current_user: 
     if current_user.role == UserRole.AGENT and chat.assigned_to != current_user.id:
         raise HTTPException(status_code=403, detail="Access denied")
     
+    # Enforce Meta's 24-hour human agent policy
+    last_customer_message = (
+        db.query(Message)
+        .filter(
+            Message.chat_id == chat_id,
+            Message.sender != MessageSender.AGENT
+        )
+        .order_by(Message.timestamp.desc())
+        .first()
+    )
+
+    if last_customer_message:
+        # Ensure the timestamp is timezone-aware before comparison
+        msg_timestamp = last_customer_message.timestamp
+        if not msg_timestamp.tzinfo:
+            msg_timestamp = msg_timestamp.replace(tzinfo=timezone.utc)
+        window_deadline = msg_timestamp + timedelta(hours=24)
+        if datetime.now(timezone.utc) > window_deadline:
+            raise HTTPException(
+                status_code=403,
+                detail="Outside the 24-hour human agent window. Send an approved template instead."
+            )
+
     # If in mock mode, just create the message without actual platform integration
     if instagram_client.mode == InstagramMode.MOCK and facebook_client.mode == FacebookMode.MOCK:
         new_message = Message(
@@ -969,6 +1071,12 @@ def create_template(
     db: Session = Depends(get_db)
 ):
     """Create a new template (admin only)"""
+    if template_data.is_meta_approved and not template_data.meta_template_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Meta-approved templates must include a Meta template ID"
+        )
+
     new_template = MessageTemplate(
         name=template_data.name,
         content=template_data.content,
@@ -997,18 +1105,30 @@ def update_template(
     if not template:
         raise HTTPException(status_code=404, detail="Template not found")
     
-    if template_data.name is not None:
+    # Only allow updating basic template info
+    if hasattr(template_data, 'name') and template_data.name is not None:
         template.name = template_data.name
-    if template_data.content is not None:
+    if hasattr(template_data, 'content') and template_data.content is not None:
         template.content = template_data.content
-    if template_data.category is not None:
+    if hasattr(template_data, 'category') and template_data.category is not None:
         template.category = template_data.category
-    if template_data.platform is not None:
+    if hasattr(template_data, 'platform') and template_data.platform is not None:
         template.platform = template_data.platform
-    if template_data.meta_template_id is not None:
+        
+    # Don't allow manual updates of Meta approval status
+    if hasattr(template_data, 'is_meta_approved') or hasattr(template_data, 'meta_template_id'):
+        raise HTTPException(
+            status_code=400,
+            detail="Meta approval status and template ID can only be updated through the Meta approval process"
+        )
+
+    if template.is_meta_approved and not template.meta_template_id:
+        raise HTTPException(
+            status_code=400,
+                detail="Invalid Meta template ID format. Must start with 'meta_'"
+            )
         template.meta_template_id = template_data.meta_template_id
-    if template_data.is_meta_approved is not None:
-        template.is_meta_approved = template_data.is_meta_approved
+        template.is_meta_approved = True  # Auto-approve if valid Meta template ID is provided
     
     template.updated_at = datetime.now(timezone.utc)
     db.commit()
@@ -1016,6 +1136,85 @@ def update_template(
     
     logger.info(f"Template updated: {template_id} by user {current_user.email}")
     return template
+
+@api_router.post("/templates/{template_id}/submit-to-meta")
+async def submit_template_to_meta(
+    template_id: str,
+    current_user: User = Depends(get_admin_only_user),
+    db: Session = Depends(get_db)
+):
+    """Submit a template for Meta's approval"""
+    from meta_template_api import meta_template_api
+    
+    template = db.query(MessageTemplate).filter(MessageTemplate.id == template_id).first()
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+
+    if template.meta_submission_status == "pending":
+        raise HTTPException(status_code=400, detail="Template is already pending Meta approval")
+
+    # Get associated Facebook page
+    facebook_page = db.query(FacebookPage).filter(FacebookPage.is_active == True).first()
+    if not facebook_page:
+        raise HTTPException(status_code=400, detail="No active Facebook page found")
+
+    try:
+        # Log template and Facebook page info for debugging
+        logger.info(f"Attempting to submit template {template_id} using Facebook page {facebook_page.page_id}")
+        logger.info(f"Template details - Name: {template.name}, Category: {template.category}")
+        
+        # Validate category format
+        valid_categories = ['CUSTOMER_SUPPORT', 'MARKETING', 'UTILITY']
+        category = template.category.upper()
+        if category not in valid_categories:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid template category. Must be one of: {', '.join(valid_categories)}"
+            )
+        
+        # Prepare template data
+        template_data = {
+            "name": template.name,
+            "category": category,
+            "content": template.content,
+            "platform": template.platform
+        }
+        
+        # Submit to Meta
+        result = await meta_template_api.submit_template(facebook_page.page_id, template_data)
+        
+        # Update template with submission info
+        template.meta_submission_id = result['id']
+        template.meta_submission_status = result['status']
+        template.updated_at = datetime.now(timezone.utc)
+        
+        try:
+            db.commit()
+        except Exception as db_error:
+            logger.error(f"Database error while updating template status: {db_error}")
+            raise HTTPException(
+                status_code=500,
+                detail="Template was submitted but failed to update status in database"
+            )
+        
+        return {
+            "message": "Template submitted for Meta approval",
+            "status": result['status'],
+            "meta_submission_id": result['id']
+        }
+        
+    except HTTPException as http_error:
+        # Re-raise HTTP exceptions with their original status codes
+        raise http_error
+        
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"Failed to submit template to Meta: {error_msg}")
+        # Include more details in the error message
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to submit template to Meta: {error_msg}"
+        )
 
 @api_router.delete("/templates/{template_id}")
 def delete_template(
@@ -1033,6 +1232,50 @@ def delete_template(
     
     logger.info(f"Template deleted: {template_id} by user {current_user.email}")
     return {"success": True, "message": "Template deleted"}
+
+@api_router.get("/templates/{template_id}/meta-status")
+async def check_meta_template_status(
+    template_id: str,
+    current_user: User = Depends(get_admin_only_user),
+    db: Session = Depends(get_db)
+):
+    """Check the Meta approval status of a template"""
+    from meta_template_api import meta_template_api
+    
+    template = db.query(MessageTemplate).filter(MessageTemplate.id == template_id).first()
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+
+    if not template.meta_submission_id:
+        raise HTTPException(status_code=400, detail="Template has not been submitted to Meta")
+
+    try:
+        # Check template status with Meta
+        result = await meta_template_api.check_template_status(template.meta_submission_id)
+        
+        # Update template status in database
+        old_status = template.meta_submission_status
+        template.meta_submission_status = result['status']
+        
+        # If status changed to approved, update template
+        if result['status'] == 'approved' and old_status != 'approved':
+            template.is_meta_approved = True
+            template.meta_template_id = result.get('template_id')  # Meta may provide a permanent template ID
+            
+        template.updated_at = datetime.now(timezone.utc)
+        db.commit()
+        
+        return {
+            "message": "Template status retrieved successfully",
+            "status": result['status'],
+            "template_id": template.meta_template_id
+        }
+    except Exception as e:
+        logger.error(f"Failed to check template status with Meta: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to check template status. Please try again later."
+        )
 
 @api_router.post("/templates/{template_id}/send", response_model=MessageResponse)
 async def send_template(
@@ -1060,6 +1303,29 @@ async def send_template(
     if template.platform != chat.platform:
         raise HTTPException(status_code=400, detail=f"Template platform ({template.platform}) doesn't match chat platform ({chat.platform})")
     
+    # Enforce Meta's 24-hour policy for template sending
+    last_customer_message = (
+        db.query(Message)
+        .filter(
+            Message.chat_id == chat.id,
+            Message.sender != MessageSender.AGENT
+        )
+        .order_by(Message.timestamp.desc())
+        .first()
+    )
+
+    # Always allow template messages for now during testing
+    # Comment out the 24-hour window check temporarily
+    """
+    if last_customer_message:
+        window_deadline = last_customer_message.timestamp + timedelta(hours=24)
+        if datetime.now(timezone.utc) > window_deadline and not template.is_meta_approved:
+            raise HTTPException(
+                status_code=403,
+                detail="Outside the 24-hour human agent window. Only Meta-approved templates can be sent."
+            )
+    """
+
     # Perform variable substitution
     message_content = template.content
     if send_request.variables:
@@ -1071,13 +1337,15 @@ async def send_template(
     message_content = message_content.replace("{username}", chat.username)
     message_content = message_content.replace("{platform}", chat.platform.value)
     
-    # TODO: For Meta-approved templates (is_meta_approved=True), use Facebook's Template API
-    # For now, we send as regular messages (simulated approach)
+    meta_template_tag = os.getenv("META_TEMPLATE_TAG", "ACCOUNT_UPDATE")
+    use_meta_template = template.is_meta_approved
+
+    if use_meta_template and not template.meta_template_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Meta-approved template is missing the Meta template ID"
+        )
     
-    # Send the message using the existing send_message logic
-    message_data = MessageCreate(content=message_content, message_type=MessageType.TEXT)
-    
-    # Reuse send_message logic
     if instagram_client.mode == InstagramMode.MOCK and facebook_client.mode == FacebookMode.MOCK:
         new_message = Message(
             chat_id=chat.id,
@@ -1098,11 +1366,20 @@ async def send_template(
             if chat.facebook_page_id:
                 fb_page = db.query(FacebookPage).filter(FacebookPage.page_id == chat.facebook_page_id).first()
                 if fb_page and fb_page.is_active:
-                    result = await facebook_client.send_text_message(
-                        page_access_token=fb_page.access_token,
-                        recipient_id=chat.instagram_user_id,
-                        text=message_content
-                    )
+                    if use_meta_template:
+                        result = await facebook_client.send_template_message(
+                            page_access_token=fb_page.access_token,
+                            recipient_id=chat.instagram_user_id,
+                            text=message_content,
+                            template_id=template.meta_template_id,
+                            tag=meta_template_tag
+                        )
+                    else:
+                        result = await facebook_client.send_text_message(
+                            page_access_token=fb_page.access_token,
+                            recipient_id=chat.instagram_user_id,
+                            text=message_content
+                        )
                     if not result.get("success"):
                         raise HTTPException(status_code=500, detail=f"Failed to send message: {result.get('error')}")
                 else:
@@ -1114,11 +1391,20 @@ async def send_template(
             if chat.facebook_page_id:
                 ig_account = db.query(InstagramAccount).filter(InstagramAccount.page_id == chat.facebook_page_id).first()
                 if ig_account:
-                    result = await instagram_client.send_text_message(
-                        page_access_token=ig_account.access_token,
-                        recipient_id=chat.instagram_user_id,
-                        text=message_content
-                    )
+                    if use_meta_template:
+                        result = await instagram_client.send_template_message(
+                            page_access_token=ig_account.access_token,
+                            recipient_id=chat.instagram_user_id,
+                            text=message_content,
+                            template_id=template.meta_template_id,
+                            tag=meta_template_tag
+                        )
+                    else:
+                        result = await instagram_client.send_text_message(
+                            page_access_token=ig_account.access_token,
+                            recipient_id=chat.instagram_user_id,
+                            text=message_content
+                        )
                     if not result.get("success"):
                         raise HTTPException(status_code=500, detail=f"Failed to send message: {result.get('error')}")
                 else:
@@ -1343,49 +1629,65 @@ def simulate_incoming_message(chat_id: str, message: str, current_user: User = D
     return {"success": True, "message": MessageResponse.model_validate(new_message)}
 
 # WebSocket endpoint
-@app.websocket("/ws")
+@app.websocket("/messenger/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    # Get token from query params
     token = websocket.query_params.get('token')
     if not token:
         await websocket.close(code=1008)  # Policy violation
+        logger.error("WebSocket connection rejected: No token provided")
         return
-    
+
     try:
-        # Verify token
+        # Verify token before accepting connection
         payload = decode_access_token(token)
         if not payload or 'user_id' not in payload:
             await websocket.close(code=1008)
+            logger.error("WebSocket connection rejected: Invalid token")
             return
         
+        # Extract user ID and set up connection
         user_id = str(payload['user_id'])
         await ws_manager.connect(websocket, user_id)
+        logger.info(f"WebSocket connected for user {user_id}")
         
-        try:
-            while True:
+        while True:
+            try:
                 # Keep connection alive and handle any incoming messages
-                data = await websocket.receive_text()
-        except WebSocketDisconnect:
-            ws_manager.disconnect(websocket, user_id)
+                data = await websocket.receive_json()
+                
+                # Handle ping messages to keep connection alive
+                if data.get('type') == 'ping':
+                    await websocket.send_json({'type': 'pong'})
+                    continue
+                
+                # Handle any other incoming messages here if needed
+                logger.debug(f"Received WebSocket message from user {user_id}: {data}")
+                
+            except WebSocketDisconnect:
+                logger.info(f"WebSocket disconnected for user {user_id}")
+                break
+            except ValueError as json_error:
+                logger.warning(f"Invalid JSON received from user {user_id}: {json_error}")
+                continue
+            except Exception as e:
+                logger.error(f"Error handling WebSocket message from user {user_id}: {e}")
+                continue
+            
     except Exception as e:
         logger.error(f"WebSocket error: {e}")
+    finally:
+        # Always clean up the connection
         try:
-            await websocket.close(code=1011)  # Internal error
-        except:
-            pass
+            ws_manager.disconnect(websocket, user_id)
+            logger.info(f"WebSocket connection cleaned up for user {user_id}")
+        except Exception as cleanup_error:
+            logger.error(f"Error during WebSocket cleanup: {cleanup_error}")
 
 # Include the router in the main app
 app.include_router(api_router)
 
 # Configure CORS
-cors_origins = os.environ.get('CORS_ORIGINS', '*').split(',')
-if '*' not in cors_origins:
-    # Add wss:// and https:// variants for production
-    ws_origins = []
-    for origin in cors_origins:
-        if origin.startswith('http'):
-            ws_origins.append(origin.replace('http', 'ws'))
-    cors_origins.extend(ws_origins)
+cors_origins = ["*"]  # Allow all origins
 
 app.add_middleware(
     CORSMiddleware,

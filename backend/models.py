@@ -91,12 +91,15 @@ class FacebookPage(Base):
     __tablename__ = "facebook_pages"
     
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String(36), ForeignKey("users.id"), nullable=False)
     page_id = Column(String(255), unique=True, nullable=False, index=True)
     page_name = Column(String(255), nullable=True)
     access_token = Column(String(500), nullable=False)
     is_active = Column(Boolean, default=True)
     connected_at = Column(DateTime(timezone=True), default=utc_now)
     updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+    
+    user = relationship("User", backref="facebook_pages")
 
 class MessageTemplate(Base):
     __tablename__ = "message_templates"
@@ -107,6 +110,8 @@ class MessageTemplate(Base):
     category = Column(String(50), nullable=False)  # greeting, utility, marketing, support, closing
     platform = Column(SQLEnum(MessagePlatform), nullable=False)
     meta_template_id = Column(String(255), nullable=True)
+    meta_submission_id = Column(String(255), nullable=True)
+    meta_submission_status = Column(String(50), nullable=True)  # pending, approved, rejected
     is_meta_approved = Column(Boolean, default=False)
     created_by = Column(String(36), ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime(timezone=True), default=utc_now)

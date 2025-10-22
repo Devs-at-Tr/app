@@ -7,7 +7,9 @@ export const initializeWebSocket = (token) => {
         return wsInstance;
     }
 
-    const wsUrl = process.env.REACT_APP_BACKEND_URL || 'ws://localhost:8000';
+    const apiUrl = process.env.REACT_APP_BACKEND_URL || 'http://localhost:8000';
+    // Convert http/https to ws/wss
+    const wsUrl = apiUrl.replace(/^http/, 'ws');
     const ws = new WebSocket(`${wsUrl}/ws?token=${token}`);
     
     // Track connection status

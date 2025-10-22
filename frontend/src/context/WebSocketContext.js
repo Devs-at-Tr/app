@@ -4,16 +4,24 @@ import useWebSocket from '../hooks/useWebSocket';
 const WebSocketContext = createContext(null);
 
 export const WebSocketProvider = ({ children, token }) => {
-  const ws = useWebSocket(token);
   const [lastMessage, setLastMessage] = useState(null);
+  const ws = useWebSocket(token);
 
   useEffect(() => {
-    if (ws) {
-      return ws.subscribe((message) => {
-        setLastMessage(message);
-      });
+    if (!token) {
+      ws?.close();
+      return;
     }
-  }, [ws]);
+
+    const unsubscribe = ws?.subscribe((message) => {
+      console.log('WebSocket message received:', message);
+      setLastMessage(message);
+    });
+
+    return () => {
+      unsubscribe?.();
+    };
+  }, [ws, token]);
 
   return (
     <WebSocketContext.Provider value={{ ws, lastMessage }}>

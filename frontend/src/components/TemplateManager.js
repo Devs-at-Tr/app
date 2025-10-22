@@ -28,7 +28,7 @@ import {
   TableRow,
 } from './ui/table';
 import { Badge } from './ui/badge';
-import { FileText, Plus, Edit, Trash2, CheckCircle } from 'lucide-react';
+import { FileText, Plus, Edit, Trash2, SendHorizonal, RefreshCw, CheckCircle } from 'lucide-react';
 import { useToast } from '../hooks/use-toast';
 
 const CATEGORIES = [
@@ -51,15 +51,14 @@ const TemplateManager = () => {
   const [editingTemplate, setEditingTemplate] = useState(null);
   const [filterPlatform, setFilterPlatform] = useState('all');
   const [filterCategory, setFilterCategory] = useState('all');
+  const [checkingStatus, setCheckingStatus] = useState({});
   const { toast } = useToast();
 
   const [formData, setFormData] = useState({
     name: '',
     content: '',
     category: 'greeting',
-    platform: 'INSTAGRAM',
-    is_meta_approved: false,
-    meta_template_id: ''
+    platform: 'INSTAGRAM'
   });
 
   useEffect(() => {
@@ -87,6 +86,56 @@ const TemplateManager = () => {
       });
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Submit template to Meta for approval
+  const submitToMeta = async (templateId) => {
+    try {
+      const token = localStorage.getItem('token');
+      await axios.post(
+        `${API}/templates/${templateId}/submit-to-meta`,
+        {},
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      toast({
+        title: 'Success',
+        description: 'Template submitted to Meta for approval'
+      });
+      loadTemplates();
+    } catch (error) {
+      console.error('Error submitting to Meta:', error);
+      toast({
+        title: 'Error',
+        description: error.response?.data?.detail || 'Failed to submit template to Meta',
+        variant: 'destructive'
+      });
+    }
+  };
+
+  // Check Meta approval status
+  const checkMetaStatus = async (templateId) => {
+    try {
+      setCheckingStatus(prev => ({ ...prev, [templateId]: true }));
+      const token = localStorage.getItem('token');
+      const response = await axios.get(
+        `${API}/templates/${templateId}/meta-status`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      toast({
+        title: 'Status Update',
+        description: `Template status: ${response.data.status}`
+      });
+      loadTemplates();
+    } catch (error) {
+      console.error('Error checking status:', error);
+      toast({
+        title: 'Error',
+        description: error.response?.data?.detail || 'Failed to check template status',
+        variant: 'destructive'
+      });
+    } finally {
+      setCheckingStatus(prev => ({ ...prev, [templateId]: false }));
     }
   };
 
@@ -123,19 +172,26 @@ const TemplateManager = () => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
+      // Note: We no longer require a Meta template ID since it will be assigned after approval
       const token = localStorage.getItem('token');
       const config = { headers: { Authorization: `Bearer ${token}` } };
+      const payload = {
+        ...formData,
+        meta_template_id: formData.meta_template_id?.trim() || null,
+        // Templates should start as not approved and be submitted to Meta
+        is_meta_approved: false
+      };
 
       if (editingTemplate) {
         // Update existing template
-        await axios.put(`${API}/templates/${editingTemplate.id}`, formData, config);
+        await axios.put(`${API}/templates/${editingTemplate.id}`, payload, config);
         toast({
           title: 'Success',
           description: 'Template updated successfully'
         });
       } else {
         // Create new template
-        await axios.post(`${API}/templates`, formData, config);
+        await axios.post(`${API}/templates`, payload, config);
         toast({
           title: 'Success',
           description: 'Template created successfully'
@@ -274,19 +330,59 @@ const TemplateManager = () => {
                     </Badge>
                   </TableCell>
                   <TableCell>
-                    {template.is_meta_approved && (
-                      <Badge className="bg-purple-600 text-white">
-                        <CheckCircle className="w-3 h-3 mr-1" />
-                        Utility
+                    {template.is_meta_approved ? (
+                      <Badge className="bg-green-600 text-white">
+                        <span className="w-2 h-2 bg-green-400 rounded-full mr-1" />
+                        Approved
+                      </Badge>
+                    ) : template.meta_submission_status === 'pending' ? (
+                      <Badge className="bg-yellow-600 text-white">
+                        <span className="w-2 h-2 bg-yellow-400 rounded-full mr-1" />
+                        Pending
+                      </Badge>
+                    ) : template.meta_submission_status === 'rejected' ? (
+                      <Badge className="bg-red-600 text-white">
+                        <span className="w-2 h-2 bg-red-400 rounded-full mr-1" />
+                        Rejected
+                      </Badge>
+                    ) : (
+                      <Badge className="bg-gray-600 text-white">
+                        <span className="w-2 h-2 bg-gray-400 rounded-full mr-1" />
+                        Not Submitted
                       </Badge>
                     )}
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-2">
+                      {!template.is_meta_approved && (
+                        <>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => submitToMeta(template.id)}
+                            disabled={template.meta_submission_status === 'pending'}
+                            title={template.meta_submission_status === 'pending' ? 'Pending Approval' : 'Submit for Meta Approval'}
+                          >
+                            <SendHorizonal className="w-4 h-4" />
+                          </Button>
+                          {template.meta_submission_status && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => checkMetaStatus(template.id)}
+                              disabled={checkingStatus[template.id]}
+                              title="Check Meta Approval Status"
+                            >
+                              <RefreshCw className={`w-4 h-4 ${checkingStatus[template.id] ? 'animate-spin' : ''}`} />
+                            </Button>
+                          )}
+                        </>
+                      )}
                       <Button
                         variant="ghost"
                         size="sm"
                         onClick={() => handleOpenDialog(template)}
+                        title="Edit Template"
                       >
                         <Edit className="w-4 h-4" />
                       </Button>
@@ -295,6 +391,7 @@ const TemplateManager = () => {
                         size="sm"
                         onClick={() => handleDelete(template.id)}
                         className="text-red-400 hover:text-red-300"
+                        title="Delete Template"
                       >
                         <Trash2 className="w-4 h-4" />
                       </Button>

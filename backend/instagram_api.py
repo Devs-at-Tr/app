@@ -32,15 +32,12 @@ class InstagramClient:
         self.verify_token = os.getenv("INSTAGRAM_WEBHOOK_VERIFY_TOKEN") or os.getenv("FACEBOOK_WEBHOOK_VERIFY_TOKEN", "ticklegram_ig_verify")
         self.timeout = int(os.getenv("INSTAGRAM_WEBHOOK_TIMEOUT", "30"))
         
-        if self.mode == InstagramMode.REAL:
-            self.client = httpx.AsyncClient(
-                timeout=httpx.Timeout(self.timeout),
-                limits=httpx.Limits(max_keepalive_connections=20, max_connections=100)
-            )
-            logger.info("Instagram Client initialized in REAL mode")
-        else:
-            self.client = None
-            logger.info("Instagram Client initialized in MOCK mode")
+        # Always initialize the HTTP client regardless of mode
+        self.client = httpx.AsyncClient(
+            timeout=httpx.Timeout(self.timeout),
+            limits=httpx.Limits(max_keepalive_connections=20, max_connections=100)
+        )
+        logger.info(f"Instagram Client initialized in {self.mode.upper()} mode")
     
     async def close(self):
         """Close HTTP client"""
@@ -67,29 +64,27 @@ class InstagramClient:
             # Log the incoming signature format
             logger.debug(f"Received signature: {signature}")
             
-            # Try SHA256 first
-            sha256_hmac = hmac.new(app_secret, payload, hashlib.sha256)
-            sha256_expected = f"sha256={sha256_hmac.hexdigest()}"
-            if hmac.compare_digest(sha256_expected, signature):
-                logger.debug("Signature verified with SHA256")
-                return True
-            
-            # Try SHA1 if SHA256 fails
-            sha1_hmac = hmac.new(app_secret, payload, hashlib.sha1)
-            sha1_expected = f"sha1={sha1_hmac.hexdigest()}"
-            if hmac.compare_digest(sha1_expected, signature):
-                logger.debug("Signature verified with SHA1")
-                return True
-            
-            # Try without prefix (legacy format)
+            # Normalize signature by removing any prefix
             raw_signature = signature.replace('sha256=', '').replace('sha1=', '')
-            if hmac.compare_digest(sha256_hmac.hexdigest(), raw_signature) or \
-               hmac.compare_digest(sha1_hmac.hexdigest(), raw_signature):
-                logger.debug("Signature verified without prefix")
+            
+            # Calculate both SHA256 and SHA1 hashes
+            sha256_hmac = hmac.new(app_secret, payload, hashlib.sha256)
+            sha1_hmac = hmac.new(app_secret, payload, hashlib.sha1)
+            
+            # Compare with both raw and prefixed formats
+            if any([
+                hmac.compare_digest(f"sha256={sha256_hmac.hexdigest()}", signature),
+                hmac.compare_digest(f"sha1={sha1_hmac.hexdigest()}", signature),
+                hmac.compare_digest(sha256_hmac.hexdigest(), raw_signature),
+                hmac.compare_digest(sha1_hmac.hexdigest(), raw_signature)
+            ]):
+                logger.debug("Signature verified")
                 return True
             
-            logger.warning(f"Signature verification failed. Expected SHA256: {sha256_expected} or SHA1: {sha1_expected}")
+            # Log expected signatures for debugging
+            logger.warning(f"Signature verification failed. Expected SHA256: sha256={sha256_hmac.hexdigest()} or SHA1: sha1={sha1_hmac.hexdigest()}")
             logger.debug(f"Received signature: {signature}")
+            logger.debug(f"Raw signature (without prefix): {raw_signature}")
             logger.debug(f"Payload (first 100 bytes): {payload[:100]}")
             return False
         
@@ -229,6 +224,80 @@ class InstagramClient:
             return {
                 "success": False,
                 "error": str(e),
+                "mode": "real"
+            }
+
+    async def send_template_message(
+        self,
+        page_access_token: str,
+        recipient_id: str,
+        text: str,
+        template_id: Optional[str] = None,
+        tag: str = "ACCOUNT_UPDATE"
+    ) -> Dict[str, Any]:
+        """
+        Send a tagged/template message to an Instagram user.
+        When template_id is provided we rely on the pre-approved Meta template.
+        """
+
+        if self.mode == InstagramMode.MOCK:
+            logger.info(
+                "MOCK MODE: Sending Instagram template message to %s (template_id=%s, tag=%s): %s",
+                recipient_id,
+                template_id,
+                tag,
+                text
+            )
+            return {
+                "success": True,
+                "recipient_id": recipient_id,
+                "message_id": f"mock_ig_template_{datetime.now().timestamp()}",
+                "mode": "mock"
+            }
+
+        url = f"{self.BASE_URL}/me/messages"
+
+        message_payload: Dict[str, Any] = {}
+        if template_id:
+            message_payload["message_creative_id"] = template_id
+        else:
+            message_payload["text"] = text
+
+        payload = {
+            "recipient": {"id": recipient_id},
+            "messaging_type": "MESSAGE_TAG",
+            "tag": tag,
+            "message": message_payload,
+            "access_token": page_access_token
+        }
+
+        try:
+            response = await self.client.post(url, json=payload)
+            response_data = response.json() if response.content else {}
+
+            if response.status_code == 200:
+                return {
+                    "success": True,
+                    "recipient_id": response_data.get("recipient_id"),
+                    "message_id": response_data.get("message_id"),
+                    "mode": "real"
+                }
+
+            error_data = response_data.get("error", {})
+            error_message = error_data.get("message", "Unknown error")
+            logger.error(f"Failed to send Instagram template message: {error_message}")
+            return {
+                "success": False,
+                "error": error_message,
+                "error_code": response.status_code,
+                "mode": "real"
+            }
+
+        except Exception as exc:
+            logger.error(f"Error sending Instagram template message: {exc}")
+            return {
+                "success": False,
+                "error": str(exc),
                 "mode": "real"
             }
     
@@ -380,6 +449,7 @@ class InstagramClient:
         """Get comments from user's posts and reels with optional media info"""
         
         if self.mode == InstagramMode.MOCK:
+            logger.info("Using mock data for Instagram comments")
             # Return mock data for testing
             return [
                 {

@@ -7,10 +7,9 @@ import LoginPage from './pages/LoginPage';
 import DashboardPage from './pages/DashboardPage';
 import SignupPage from './pages/SignupPage';
 
-// Get backend URL from environment or use current domain
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || '';
-// If BACKEND_URL is not set, use relative path for API
-export const API = BACKEND_URL ? `${BACKEND_URL}/api` : '/api';
+// Get backend URL from environment or use local development server during testing
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:8000';
+export const API = `${BACKEND_URL}/api`;
 
 function App() {
   const [user, setUser] = useState(null);
@@ -68,8 +67,8 @@ function App() {
   }
 
   return (
-    <BrowserRouter>
-      <WebSocketProvider token={localStorage.getItem('token')}>
+    <WebSocketProvider token={user ? localStorage.getItem('token') : null}>
+      <BrowserRouter>
         <Routes>
           <Route
             path="/login"
@@ -102,8 +101,8 @@ function App() {
             }
           />
         </Routes>
-      </WebSocketProvider>
-    </BrowserRouter>
+      </BrowserRouter>
+    </WebSocketProvider>
   );
 }
 

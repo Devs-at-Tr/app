@@ -7,7 +7,9 @@ import { Button } from './ui/button';
 import { ScrollArea } from './ui/scroll-area';
 import { Avatar } from './ui/avatar';
 import { Card } from './ui/card';
-import { Instagram, Facebook, ExternalLink, MessageCircle, Send } from 'lucide-react';
+import { Instagram, Facebook, ExternalLink, MessageCircle, Send, UserCircle, X } from 'lucide-react';
+import { Badge } from './ui/badge';
+import { useIsMobile } from '../hooks/useMediaQuery';
 
 const formatTimestamp = (value) => {
   if (!value) return '';
@@ -118,6 +120,8 @@ const SocialComments = ({ selectedPlatform = 'all' }) => {
   const [replyTarget, setReplyTarget] = useState(null);
   const [replyText, setReplyText] = useState('');
   const [search, setSearch] = useState('');
+  const [isProfileOpen, setIsProfileOpen] = useState(false);
+  const isMobile = useIsMobile();
 
   const fetchComments = useCallback(async (platform) => {
     try {
@@ -173,21 +177,17 @@ const SocialComments = ({ selectedPlatform = 'all' }) => {
   }, []);
 
   useEffect(() => {
-    fetchComments(selectedPlatform === 'all' ? 'all' : activeTab);
-  }, [fetchComments, selectedPlatform, activeTab]);
-
-  useEffect(() => {
-    if (selectedPlatform === 'all') {
-      return;
+    // Set initial tab based on selectedPlatform
+    if (selectedPlatform !== 'all') {
+      setActiveTab(selectedPlatform);
     }
-    setActiveTab(selectedPlatform);
   }, [selectedPlatform]);
 
   useEffect(() => {
-    if (selectedPlatform !== 'all') {
-      fetchComments(selectedPlatform);
-    }
-  }, [selectedPlatform, fetchComments]);
+    // Fetch comments whenever activeTab changes
+    const platformToFetch = activeTab === selectedPlatform ? selectedPlatform : activeTab;
+    fetchComments(platformToFetch);
+  }, [activeTab, selectedPlatform, fetchComments]);
 
   useEffect(() => {
     const currentList = comments[activeTab] || [];
@@ -201,6 +201,14 @@ const SocialComments = ({ selectedPlatform = 'all' }) => {
       setReplyTarget(currentList[0]);
     }
   }, [comments, activeTab, selectedThread]);
+
+  useEffect(() => {
+    if (!selectedThread) {
+      setIsProfileOpen(false);
+      return;
+    }
+    setIsProfileOpen(!isMobile);
+  }, [selectedThread, isMobile]);
 
   const currentComments = useMemo(() => {
     const list = comments[activeTab] || [];
@@ -238,6 +246,9 @@ const SocialComments = ({ selectedPlatform = 'all' }) => {
     setSelectedThread(thread);
     setReplyTarget(thread);
     setReplyText('');
+    if (!isMobile) {
+      setIsProfileOpen(true);
+    }
   };
 
   const handleReplyToMessage = (messageId) => {
@@ -251,6 +262,10 @@ const SocialComments = ({ selectedPlatform = 'all' }) => {
     if (reply) {
       setReplyTarget(reply);
     }
+  };
+
+  const toggleProfilePanel = () => {
+    setIsProfileOpen((prev) => !prev);
   };
 
   const renderThread = () => {
@@ -285,25 +300,47 @@ const SocialComments = ({ selectedPlatform = 'all' }) => {
 
     return (
       <div className="flex-1 flex flex-col min-h-0">
-        <PostPreview post={selectedThread.post} />
-
         <div className="bg-[#181828] border border-gray-800 rounded-xl p-4 mb-3">
-          <div className="flex items-start gap-3">
-            <Avatar className="w-10 h-10">
-              <img
-                src={selectedThread.profile_pic || `https://ui-avatars.com/api/?name=${selectedThread.username}`}
-                alt={selectedThread.username}
-              />
-            </Avatar>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center justify-between">
-                <p className="text-sm font-semibold text-white">{selectedThread.username}</p>
-                <span className="text-xs text-gray-500">{formatTimestamp(selectedThread.timestamp)}</span>
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-start gap-3 flex-1">
+              <Avatar className="w-10 h-10">
+                <img
+                  src={selectedThread.profile_pic || `https://ui-avatars.com/api/?name=${selectedThread.username}`}
+                  alt={selectedThread.username}
+                />
+              </Avatar>
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-white truncate">{selectedThread.username}</p>
+                <p className="text-xs text-gray-500 mt-1">{formatTimestamp(selectedThread.timestamp)}</p>
               </div>
-              <p className="mt-2 text-sm text-gray-200 whitespace-pre-line">{selectedThread.text || 'No comment text provided.'}</p>
             </div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="text-gray-400 hover:text-gray-100"
+              onClick={toggleProfilePanel}
+              aria-label={isProfileOpen ? 'Hide profile' : 'Show profile'}
+            >
+              {isProfileOpen ? <X className="h-4 w-4" /> : <UserCircle className="h-4 w-4" />}
+            </Button>
           </div>
+          <p className="mt-3 text-sm text-gray-200 whitespace-pre-line">
+            {selectedThread.text || 'No comment text provided.'}
+          </p>
         </div>
+
+        {isProfileOpen && isMobile && (
+          <div className="mb-3">
+            <CommentProfilePanel
+              thread={selectedThread}
+              totalReplies={replies.length}
+              onClose={toggleProfilePanel}
+              isMobile
+              platform={activeTab}
+            />
+          </div>
+        )}
 
         <div className="flex-1 min-h-0 overflow-y-auto space-y-3 pr-1">
           {replies.length === 0 ? (
@@ -398,14 +435,42 @@ const SocialComments = ({ selectedPlatform = 'all' }) => {
     </div>
   );
 
-  const renderContent = () => (
-    <div className="grid grid-cols-1 gap-4 lg:grid-cols-12 h-[calc(100vh-320px)]">
-      <div className="lg:col-span-4 h-full min-h-0">{renderList()}</div>
-      <div className="lg:col-span-8 h-full min-h-0 bg-[#1a1a2e] border border-gray-800 rounded-xl p-4 flex flex-col">
-        {renderThread()}
+  const renderContent = () => {
+    const threadColumnClass = `lg:col-span-8 ${!isMobile && isProfileOpen ? 'lg:col-span-5' : ''}`;
+
+    return (
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-12 h-[calc(100vh-320px)]">
+        <div className="lg:col-span-4 h-full min-h-0">{renderList()}</div>
+        <div className={`${threadColumnClass} h-full min-h-0 bg-[#1a1a2e] border border-gray-800 rounded-xl p-4 flex flex-col`}>
+          {renderThread()}
+        </div>
+        {!isMobile && isProfileOpen && selectedThread && (
+          <div className="lg:col-span-3 h-full min-h-0">
+            <CommentProfilePanel
+              thread={selectedThread}
+              totalReplies={(selectedThread.replies || []).length}
+              onClose={toggleProfilePanel}
+              platform={activeTab}
+            />
+          </div>
+        )}
       </div>
-    </div>
-  );
+    );
+  };
+
+  const renderProfile = () => {
+    if (!selectedThread) return null;
+    
+    return (
+      <div className="h-full min-h-0">
+        <CommentProfilePanel
+          thread={selectedThread}
+          totalReplies={(selectedThread.replies || []).length}
+          platform={activeTab}
+        />
+      </div>
+    );
+  };
 
   return (
     <div className="flex flex-col gap-3">
@@ -421,14 +486,134 @@ const SocialComments = ({ selectedPlatform = 'all' }) => {
               Facebook
             </TabsTrigger>
           </TabsList>
-          <TabsContent value="instagram">{renderContent()}</TabsContent>
-          <TabsContent value="facebook">{renderContent()}</TabsContent>
+          <TabsContent value="instagram">
+            <div className="grid grid-cols-12 gap-4 h-[calc(100vh-320px)]">
+              <div className="col-span-4">{renderList()}</div>
+              <div className="col-span-5">{renderThread()}</div>
+              <div className="col-span-3">{renderProfile()}</div>
+            </div>
+          </TabsContent>
+          <TabsContent value="facebook">
+            <div className="grid grid-cols-12 gap-4 h-[calc(100vh-320px)]">
+              <div className="col-span-4">{renderList()}</div>
+              <div className="col-span-5">{renderThread()}</div>
+              <div className="col-span-3">{renderProfile()}</div>
+            </div>
+          </TabsContent>
         </Tabs>
       ) : (
-        renderContent()
+        <div className="grid grid-cols-12 gap-4 h-[calc(100vh-320px)]">
+          <div className="col-span-4">{renderList()}</div>
+          <div className="col-span-5">{renderThread()}</div>
+          <div className="col-span-3">{renderProfile()}</div>
+        </div>
       )}
     </div>
   );
 };
 
 export default SocialComments;
+
+const CommentProfilePanel = ({ thread, totalReplies, onClose, isMobile = false, platform }) => {
+  if (!thread) {
+    return null;
+  }
+
+  const platformLabel = (platform || thread.platform || 'instagram').toLowerCase() === 'facebook'
+    ? 'Facebook'
+    : 'Instagram';
+
+  const platformBadgeClass =
+    platformLabel === 'Facebook'
+      ? 'bg-blue-500/15 text-blue-300 border border-blue-500/40'
+      : 'bg-pink-500/15 text-pink-300 border border-pink-500/40';
+
+  const containerClasses = isMobile
+    ? 'bg-[#181828] border border-gray-800 rounded-xl p-4'
+    : 'bg-[#101023] border border-gray-800 rounded-xl h-full flex flex-col p-4';
+
+  const infoItems = [
+    { label: 'Comment ID', value: thread.id },
+    { label: 'Posted', value: formatTimestamp(thread.timestamp) },
+    { label: 'Replies', value: totalReplies },
+  ];
+
+  if (thread.post?.permalink) {
+    infoItems.push({
+      label: 'Permalink',
+      value: thread.post.permalink,
+      isLink: true,
+    });
+  }
+
+  return (
+    <div className={containerClasses}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-start gap-3">
+          <Avatar className="w-12 h-12">
+            <img
+              src={thread.profile_pic || `https://ui-avatars.com/api/?name=${thread.username}`}
+              alt={thread.username}
+            />
+          </Avatar>
+          <div>
+            <p className="text-base font-semibold text-white">@{thread.username}</p>
+            <div className="flex items-center gap-2 mt-1">
+              <Badge className={platformBadgeClass}>{platformLabel}</Badge>
+              <span className="text-xs text-gray-500">{formatTimestamp(thread.timestamp)}</span>
+            </div>
+          </div>
+        </div>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="text-gray-500 hover:text-gray-200"
+          onClick={onClose}
+          aria-label="Close profile"
+        >
+          <X className="h-4 w-4" />
+        </Button>
+      </div>
+
+      <div className="mt-4 space-y-4">
+        <div>
+          <p className="text-xs uppercase text-gray-500 tracking-wide mb-1">Comment</p>
+          <p className="text-sm text-gray-200 whitespace-pre-line">
+            {thread.text || 'No comment text provided.'}
+          </p>
+        </div>
+
+        <div>
+          <p className="text-xs uppercase text-gray-500 tracking-wide mb-2">Details</p>
+          <div className="space-y-2">
+            {infoItems.map((item) => (
+              <div key={item.label}>
+                <p className="text-[11px] uppercase text-gray-500">{item.label}</p>
+                {item.isLink ? (
+                  <a
+                    href={item.value}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-sm text-purple-300 hover:text-purple-200 break-all"
+                  >
+                    Open post in new tab
+                  </a>
+                ) : (
+                  <p className="text-sm text-gray-200 break-all">{item.value}</p>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {thread.post && (
+          <div>
+            <p className="text-xs uppercase text-gray-500 tracking-wide mb-2">Associated Post</p>
+            <PostPreview post={thread.post} />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};

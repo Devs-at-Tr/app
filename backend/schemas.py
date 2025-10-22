@@ -144,6 +144,8 @@ class MessageTemplateCreate(BaseModel):
     category: str  # greeting, utility, marketing, support, closing
     platform: MessagePlatform
     meta_template_id: Optional[str] = None
+    meta_submission_id: Optional[str] = None
+    meta_submission_status: Optional[str] = None
     is_meta_approved: bool = False
 
 class MessageTemplateUpdate(BaseModel):
@@ -152,6 +154,8 @@ class MessageTemplateUpdate(BaseModel):
     category: Optional[str] = None
     platform: Optional[MessagePlatform] = None
     meta_template_id: Optional[str] = None
+    meta_submission_id: Optional[str] = None
+    meta_submission_status: Optional[str] = None
     is_meta_approved: Optional[bool] = None
 
 class MessageTemplateResponse(BaseModel):
@@ -161,6 +165,8 @@ class MessageTemplateResponse(BaseModel):
     category: str
     platform: MessagePlatform
     meta_template_id: Optional[str]
+    meta_submission_id: Optional[str]
+    meta_submission_status: Optional[str]
     is_meta_approved: bool
     created_by: str
     created_at: datetime

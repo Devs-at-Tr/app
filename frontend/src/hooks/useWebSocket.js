@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useRef } from 'react';
+import { useEffect, useCallback, useRef, useState } from 'react';
 
 const useWebSocket = (token) => {
   // Use refs to maintain consistent references and persist values between renders
@@ -6,54 +6,119 @@ const useWebSocket = (token) => {
   const reconnectTimerRef = useRef(null);
   const handlersRef = useRef([]);
   const isConnectingRef = useRef(false);
+  const [isConnected, setIsConnected] = useState(false);
 
   // Create WebSocket connection
   const connect = useCallback(() => {
+    if (!token) {
+      console.log('No token available, skipping WebSocket connection');
+      return;
+    }
+
     if (wsRef.current?.readyState === WebSocket.OPEN || isConnectingRef.current) {
-      return; // Already connected or connecting
+      console.log('WebSocket already connected or connecting');
+      return;
     }
 
     isConnectingRef.current = true;
-    const wsUrl = process.env.REACT_APP_BACKEND_URL || window.location.origin.replace('http', 'ws');
-    const ws = new WebSocket(`${wsUrl}/ws?token=${token}`);
-
-    ws.onopen = () => {
-      console.log('WebSocket connected');
-      if (reconnectTimerRef.current) {
-        clearTimeout(reconnectTimerRef.current);
-        reconnectTimerRef.current = null;
+    
+    try {
+      // Clean up any existing connection
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
       }
-      isConnectingRef.current = false;
-    };
 
-    ws.onclose = () => {
-      console.log('WebSocket disconnected');
-      isConnectingRef.current = false;
-      // Only attempt to reconnect if we haven't already scheduled a reconnection
-      if (!reconnectTimerRef.current && wsRef.current) {
-        reconnectTimerRef.current = setTimeout(() => {
+      // Use same backend URL as API but with WebSocket protocol
+      const wsUrl = (process.env.REACT_APP_BACKEND_URL || 'http://localhost:8000').replace('http', 'ws');
+      const newWs = new WebSocket(`${wsUrl}/messenger/ws?token=${token}`);
+      wsRef.current = newWs;
+
+      newWs.onopen = () => {
+        console.log('WebSocket connected successfully');
+        if (reconnectTimerRef.current) {
+          clearTimeout(reconnectTimerRef.current);
           reconnectTimerRef.current = null;
-          connect();
-        }, 5000);
-      }
-    };
+        }
+        isConnectingRef.current = false;
+        setIsConnected(true);
 
-    ws.onerror = (error) => {
-      console.error('WebSocket error:', error);
+        // Send periodic ping to keep connection alive
+        const pingInterval = setInterval(() => {
+          if (wsRef.current?.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify({ type: 'ping' }));
+          } else {
+            clearInterval(pingInterval);
+          }
+        }, 30000);
+        wsRef.current.pingInterval = pingInterval;
+      };
+
+      newWs.onclose = (event) => {
+        console.log('WebSocket disconnected', event.code, event.reason);
+        isConnectingRef.current = false;
+        setIsConnected(false);
+
+        // Clear ping interval if it exists
+        if (wsRef.current?.pingInterval) {
+          clearInterval(wsRef.current.pingInterval);
+        }
+
+        // Define reconnection conditions
+        const isNormalClosure = event.code === 1000; // Normal closure
+        const isAuthFailure = event.code === 1008; // Policy violation (usually auth)
+        const isCleanDisconnect = event.code === 1001; // Going away (page unload)
+        
+        // Only attempt to reconnect for unexpected closures and when we have a token
+        const shouldReconnect = !isNormalClosure && !isAuthFailure && !isCleanDisconnect && token;
+        
+        // Clear any existing reconnection timer
+        if (reconnectTimerRef.current) {
+          clearTimeout(reconnectTimerRef.current);
+          reconnectTimerRef.current = null;
+        }
+        
+        if (shouldReconnect) {
+          console.log('Scheduling WebSocket reconnection...');
+          reconnectTimerRef.current = setTimeout(() => {
+            console.log('Attempting to reconnect WebSocket...');
+            reconnectTimerRef.current = null;
+            connect();
+          }, 5000);
+        }
+      };
+
+      newWs.onerror = (error) => {
+        console.error('WebSocket error:', error);
+        isConnectingRef.current = false;
+        setIsConnected(false);
+      };
+
+      // Set up message handler
+      newWs.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          handlersRef.current.forEach(handler => handler(data));
+        } catch (error) {
+          console.error('Error processing WebSocket message:', error);
+        }
+      };
+    } catch (error) {
+      console.error('Error creating WebSocket connection:', error);
       isConnectingRef.current = false;
-    };
+    }
 
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        // Notify all registered handlers
-        handlersRef.current.forEach(handler => handler(data));
-      } catch (error) {
-        console.error('Error processing WebSocket message:', error);
-      }
-    };
+    // ws.onmessage = (event) => {
+    //   try {
+    //     const data = JSON.parse(event.data);
+    //     // Notify all registered handlers
+    //     handlersRef.current.forEach(handler => handler(data));
+    //   } catch (error) {
+    //     console.error('Error processing WebSocket message:', error);
+    //   }
+    // };
 
-    wsRef.current = ws;
+    // wsRef.current = newWs;
   }, [token]);
 
   // Subscribe to WebSocket messages
@@ -86,11 +151,16 @@ const useWebSocket = (token) => {
     return () => close();
   }, [token, connect, close]);
 
+  // Return the WebSocket interface
   return {
     subscribe,
     close,
     connect,
-    isConnected: wsRef.current?.readyState === WebSocket.OPEN
+    isConnected,
+    reconnect: () => {
+      close();
+      connect();
+    }
   };
 };
 

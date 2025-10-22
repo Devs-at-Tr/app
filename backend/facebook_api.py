@@ -16,7 +16,99 @@ class FacebookMode(str, Enum):
 class FacebookMessengerClient:
     """Client for Facebook Messenger API with mock/real mode support"""
     
-    BASE_URL = "https://graph.facebook.com/v23.0"
+    BASE_URL = "https://graph.facebook.com/v17.0"  # Using stable version
+
+    async def get_page_feed_with_comments(self, page_access_token: str, page_id: str) -> List[Dict[str, Any]]:
+        """Get page feed with comments in a single batch request"""
+        if self.mode == FacebookMode.MOCK:
+            return []
+        
+        logger.info(f"Fetching feed with comments for page {page_id}")
+        
+        try:
+            # First get the page feed with embedded comments
+            url = f"{self.BASE_URL}/{page_id}/feed"
+            params = {
+                "access_token": page_access_token,
+                "fields": (
+                    "id,message,created_time,permalink_url,full_picture,"
+                    "comments.limit(25){id,message,created_time,from{id,name,picture{url}},"
+                    "attachment,comments.limit(25){id,message,created_time,from{id,name,picture{url}},attachment},"
+                    "reactions.summary(total_count)},reactions.summary(total_count)"
+                ),
+                "limit": 25  # Reduced for faster loading
+            }
+
+            response = await self.client.get(url, params=params)
+            response.raise_for_status()
+            data = response.json()
+            
+            logger.debug(f"Facebook API Response: {data}")  # Log the full response
+            
+            if not data.get("data"):
+                logger.warning(f"No posts found for page {page_id}")
+                return []
+
+            comments = []
+            for post in data.get("data", []):
+                # Get comments from the post
+                post_comments = post.get("comments", {}).get("data", [])
+                
+                # Process each comment
+                for comment in post_comments:
+                    try:
+                        # Get user profile picture URL
+                        profile_pic = comment.get("from", {}).get("picture", {}).get("data", {}).get("url")
+                        
+                        # Process comment replies
+                        replies = []
+                        for reply in comment.get("comments", {}).get("data", []):
+                            reply_profile_pic = reply.get("from", {}).get("picture", {}).get("data", {}).get("url")
+                            replies.append({
+                                "id": reply["id"],
+                                "text": reply.get("message", ""),
+                                "timestamp": reply["created_time"],
+                                "username": reply.get("from", {}).get("name", "Unknown"),
+                                "profile_pic": reply_profile_pic,
+                                "media_url": reply.get("attachment", {}).get("media", {}).get("image", {}).get("src")
+                            })
+
+                        # Create comment data
+                        comment_data = {
+                            "id": comment["id"],
+                            "text": comment.get("message", ""),
+                            "timestamp": comment["created_time"],
+                            "username": comment.get("from", {}).get("name", "Unknown"),
+                            "profile_pic": profile_pic,
+                            "replies": replies,
+                            "media_url": comment.get("attachment", {}).get("media", {}).get("image", {}).get("src"),
+                            "reaction_count": comment.get("reactions", {}).get("summary", {}).get("total_count", 0),
+                            "post": {
+                                "id": post["id"],
+                                "caption": post.get("message", ""),
+                                "timestamp": post["created_time"],
+                                "permalink": post["permalink_url"],
+                                "media_url": post.get("full_picture"),
+                                "media_type": "IMAGE" if post.get("full_picture") else "STATUS"
+                            }
+                        }
+                        comments.append(comment_data)
+                    except Exception as e:
+                        logger.error(f"Error processing comment: {str(e)}")
+                        continue
+
+            logger.info(f"Successfully fetched {len(comments)} comments for page {page_id}")
+            return comments
+
+        except httpx.HTTPStatusError as e:
+            logger.error(f"HTTP error fetching page feed: {e.response.status_code} - {e.response.text}")
+            raise Exception(f"Facebook API error: {e.response.text}")
+        except httpx.RequestError as e:
+            logger.error(f"Request error fetching page feed: {str(e)}")
+            raise Exception(f"Connection error: {str(e)}")
+        except Exception as e:
+            logger.error(f"Error fetching page feed with comments: {str(e)}")
+            raise Exception(f"Unexpected error: {str(e)}")
     
     def __init__(self, mode: FacebookMode = None):
         self.mode = mode or FacebookMode(os.getenv("FACEBOOK_MODE", "mock"))
@@ -24,15 +116,12 @@ class FacebookMessengerClient:
         self.verify_token = os.getenv("FACEBOOK_WEBHOOK_VERIFY_TOKEN", "ticklegram_fb_verify")
         self.timeout = int(os.getenv("FACEBOOK_WEBHOOK_TIMEOUT", "30"))
         
-        if self.mode == FacebookMode.REAL:
-            self.client = httpx.AsyncClient(
-                timeout=httpx.Timeout(self.timeout),
-                limits=httpx.Limits(max_keepalive_connections=20, max_connections=100)
-            )
-            logger.info("Facebook Messenger Client initialized in REAL mode")
-        else:
-            self.client = None
-            logger.info("Facebook Messenger Client initialized in MOCK mode")
+        # Always create HTTP client regardless of mode
+        self.client = httpx.AsyncClient(
+            timeout=httpx.Timeout(self.timeout),
+            limits=httpx.Limits(max_keepalive_connections=20, max_connections=100)
+        )
+        logger.info(f"Facebook Messenger Client initialized in {self.mode} mode")
     
     async def close(self):
         """Close HTTP client"""
@@ -205,6 +294,238 @@ class FacebookMessengerClient:
             return {
                 "success": False,
                 "error": str(e),
+                "mode": "real"
+            }
+
+    async def get_page_posts(self, page_access_token: str, page_id: str) -> List[Dict[str, Any]]:
+        """Get posts from a Facebook page"""
+        if self.mode == FacebookMode.MOCK:
+            return []
+        
+        url = f"{self.BASE_URL}/{page_id}/feed"  # Use feed instead of posts to get all types of posts
+        params = {
+            "access_token": page_access_token,
+            "fields": "id,message,created_time,permalink_url,full_picture,attachments{media_type,url,title,description},likes.summary(true),comments.summary(true)",
+            "limit": 100
+        }
+        
+        try:
+            response = await self.client.get(url, params=params)
+            if response.status_code == 200:
+                data = response.json().get("data", [])
+                return [{
+                    "id": post["id"],
+                    "caption": post.get("message", ""),
+                    "timestamp": post["created_time"],
+                    "permalink": post["permalink_url"],
+                    "media_type": post.get("attachments", {}).get("data", [{}])[0].get("media_type", "STATUS"),
+                    "media_url": post.get("full_picture") or post.get("attachments", {}).get("data", [{}])[0].get("url"),
+                    "like_count": post.get("likes", {}).get("summary", {}).get("total_count", 0),
+                    "comment_count": post.get("comments", {}).get("summary", {}).get("total_count", 0)
+                } for post in data]
+            else:
+                logger.error(f"Failed to fetch Facebook posts: {response.text}")
+                return []
+        except Exception as e:
+            logger.error(f"Error fetching Facebook posts: {e}")
+            return []
+
+    async def get_post_comments(self, page_access_token: str, post_id: str) -> List[Dict[str, Any]]:
+        """Get comments on a Facebook post"""
+        if self.mode == FacebookMode.MOCK:
+            return []
+        
+        url = f"{self.BASE_URL}/{post_id}/comments"
+        params = {
+            "access_token": page_access_token,
+            "fields": "id,message,created_time,from{id,name,picture},comment_count,permalink_url,attachment,reactions.summary(total_count),comments.summary(total_count)",
+            "limit": 100,
+            "filter": "toplevel",  # Get only top-level comments first
+            "order": "reverse_chronological"  # Get newest first
+        }
+        
+        try:
+            response = await self.client.get(url, params=params)
+            if response.status_code == 200:
+                data = response.json().get("data", [])
+                comments = []
+                for comment in data:
+                    # Get user profile picture URL from the from.picture field
+                    profile_pic_url = None
+                    try:
+                        profile_pic_url = comment.get("from", {}).get("picture", {}).get("data", {}).get("url")
+                    except Exception:
+                        pass
+
+                    comment_data = {
+                        "id": comment["id"],
+                        "text": comment.get("message", ""),
+                        "timestamp": comment["created_time"],
+                        "username": comment.get("from", {}).get("name", "Unknown"),
+                        "profile_pic": profile_pic_url,
+                        "replies": [],
+                        "permalink": comment.get("permalink_url"),
+                        "reaction_count": comment.get("reactions", {}).get("summary", {}).get("total_count", 0),
+                        "media_url": comment.get("attachment", {}).get("media", {}).get("image", {}).get("src"),
+                        "comment_count": comment.get("comments", {}).get("summary", {}).get("total_count", 0)
+                    }
+                    
+                    # Fetch replies if this comment has any
+                    if comment_data["comment_count"] > 0:
+                        replies = await self.get_comment_replies(page_access_token, comment["id"])
+                        comment_data["replies"] = replies
+                    
+                    comments.append(comment_data)
+                
+                return comments
+            else:
+                error_data = response.json() if response.content else {}
+                error_message = error_data.get("error", {}).get("message", "Unknown error")
+                logger.error(f"Failed to fetch Facebook comments: {error_message}")
+                return []
+        except Exception as e:
+            logger.error(f"Error fetching Facebook comments: {e}")
+            return []
+
+    async def get_comment_replies(self, page_access_token: str, comment_id: str) -> List[Dict[str, Any]]:
+        """Get replies to a Facebook comment"""
+        if self.mode == FacebookMode.MOCK:
+            return []
+        
+        url = f"{self.BASE_URL}/{comment_id}/comments"
+        params = {
+            "access_token": page_access_token,
+            "fields": "id,message,created_time,from{id,name,picture}",
+            "limit": 100
+        }
+        
+        try:
+            response = await self.client.get(url, params=params)
+            if response.status_code == 200:
+                data = response.json().get("data", [])
+                return [{
+                    "id": reply["id"],
+                    "text": reply.get("message", ""),
+                    "timestamp": reply["created_time"],
+                    "username": reply.get("from", {}).get("name", "Unknown"),
+                    "profile_pic": reply.get("from", {}).get("picture", {}).get("data", {}).get("url")
+                } for reply in data]
+            else:
+                logger.error(f"Failed to fetch Facebook comment replies: {response.text}")
+                return []
+        except Exception as e:
+            logger.error(f"Error fetching Facebook comment replies: {e}")
+            return []
+
+    async def reply_to_comment(self, page_access_token: str, comment_id: str, message: str) -> Dict[str, Any]:
+        """Reply to a Facebook comment"""
+        if self.mode == FacebookMode.MOCK:
+            return {
+                "success": True,
+                "comment_id": f"mock_reply_{datetime.now().timestamp()}",
+                "mode": "mock"
+            }
+        
+        url = f"{self.BASE_URL}/{comment_id}/comments"
+        payload = {
+            "message": message,
+            "access_token": page_access_token
+        }
+        
+        try:
+            response = await self.client.post(url, json=payload)
+            if response.status_code == 200:
+                data = response.json()
+                return {
+                    "success": True,
+                    "comment_id": data.get("id"),
+                    "mode": "real"
+                }
+            else:
+                error_data = response.json() if response.content else {}
+                error_message = error_data.get("error", {}).get("message", "Unknown error")
+                logger.error(f"Failed to reply to Facebook comment: {error_message}")
+                return {
+                    "success": False,
+                    "error": error_message,
+                    "mode": "real"
+                }
+        except Exception as e:
+            logger.error(f"Error replying to Facebook comment: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "mode": "real"
+            }
+
+    async def send_template_message(
+        self,
+        page_access_token: str,
+        recipient_id: str,
+        text: str,
+        template_id: Optional[str] = None,
+        tag: str = "ACCOUNT_UPDATE"
+    ) -> Dict[str, Any]:
+        """Send a tagged/template message outside the standard 24-hour window"""
+
+        if self.mode == FacebookMode.MOCK:
+            logger.info(
+                "MOCK MODE: Sending Facebook template message to %s (template_id=%s, tag=%s): %s",
+                recipient_id,
+                template_id,
+                tag,
+                text
+            )
+            return {
+                "success": True,
+                "recipient_id": recipient_id,
+                "message_id": f"mock_fb_template_{datetime.now().timestamp()}",
+                "mode": "mock"
+            }
+
+        url = f"{self.BASE_URL}/me/messages"
+
+        message_payload: Dict[str, Any] = {}
+        if template_id:
+            message_payload["message_creative_id"] = template_id
+        else:
+            message_payload["text"] = text
+
+        payload = {
+            "recipient": {"id": recipient_id},
+            "messaging_type": "MESSAGE_TAG",
+            "tag": tag,
+            "message": message_payload,
+            "access_token": page_access_token
+        }
+
+        try:
+            response = await self.client.post(url, json=payload)
+
+            if response.status_code == 200:
+                response_data = response.json()
+                return {
+                    "success": True,
+                    "recipient_id": response_data.get("recipient_id"),
+                    "message_id": response_data.get("message_id"),
+                    "mode": "real"
+                }
+
+            error_data = response.json() if response.content else {}
+            error_message = error_data.get("error", {}).get("message", "Unknown error")
+            logger.error(f"Failed to send Facebook template message: {error_message}")
+            return {
+                "success": False,
+                "error": error_message,
+                "error_code": response.status_code,
+                "mode": "real"
+            }
+
+        except Exception as exc:
+            logger.error(f"Error sending Facebook template message: {exc}")
+            return {
+                "success": False,
+                "error": str(exc),
                 "mode": "real"
             }
     
