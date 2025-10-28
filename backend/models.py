@@ -62,6 +62,7 @@ class Chat(Base):
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     instagram_user_id = Column(String(255), nullable=False, index=True)
     username = Column(String(255), nullable=False)
+    profile_pic_url = Column(Text, nullable=True)
     last_message = Column(Text, nullable=True)
     status = Column(SQLEnum(ChatStatus), nullable=False, default=ChatStatus.UNASSIGNED)
     assigned_to = Column(String(36), ForeignKey("users.id"), nullable=True)

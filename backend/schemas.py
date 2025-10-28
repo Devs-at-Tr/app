@@ -83,6 +83,7 @@ class ChatResponse(BaseModel):
     id: str
     instagram_user_id: str
     username: str
+    profile_pic_url: Optional[str]
     last_message: Optional[str]
     status: ChatStatus
     assigned_to: Optional[str]

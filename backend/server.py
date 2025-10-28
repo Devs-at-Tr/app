@@ -39,16 +39,6 @@ app = FastAPI(
     root_path=os.getenv('API_ROOT_PATH', ''),
 )
 
-# Configure CORS
-origins = [os.getenv('CORS_ALLOWED_ORIGINS', '*').split(',')]
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 # Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")
@@ -218,12 +208,12 @@ async def list_instagram_comments(
                             "username": f"instagram_user_{i}",
                             "text": f"This is a test comment {i}",
                             "timestamp": datetime.now(timezone.utc).isoformat(),
-                            "profile_pic": None,
+                            "profile_pic_url": None,
                             "replies": [],
                             "post": {
                                 "id": f"post_{i}",
                                 "username": account.username,
-                                "profile_pic": None,
+                                "profile_pic_url": None,
                                 "media_type": "REEL" if i % 2 == 0 else "IMAGE",
                                 "media_url": f"https://picsum.photos/id/{i}/800",
                                 "permalink": f"https://instagram.com/p/mock_{i}",
@@ -970,6 +960,7 @@ def connect_facebook_page(
     
     # Create new Facebook page
     new_page = FacebookPage(
+        user_id=current_user.id,
         page_id=page_data.page_id,
         page_name=page_data.page_name or f"Facebook Page {page_data.page_id[:8]}",
         access_token=page_data.access_token
@@ -1509,9 +1500,10 @@ async def handle_facebook_webhook(request: Request, db: Session = Depends(get_db
                             Chat.platform == MessagePlatform.FACEBOOK,
                             Chat.facebook_page_id == page_id
                         ).first()
-                        
-                        if not chat:
-                            # Get user profile
+
+                        # Get fresh user profile data if chat doesn't exist or username is generic
+                        should_update_profile = not chat or (chat and chat.username.startswith(("FB User", "User")))
+                        if should_update_profile:
                             profile = await facebook_client.get_user_profile(
                                 page_access_token=fb_page.access_token,
                                 user_id=sender_id
@@ -1687,13 +1679,25 @@ async def websocket_endpoint(websocket: WebSocket):
 app.include_router(api_router)
 
 # Configure CORS
-cors_origins = ["*"]  # Allow all origins
+# cors_origins = ["*"]  # Allow all origins
+
+# app.add_middleware(
+#     CORSMiddleware,
+#     allow_credentials=True,
+#     allow_origins=cors_origins,
+#     allow_methods=["*"],
+#     allow_headers=["*"],
+#     expose_headers=["*"]
+# )
+
+# Configure CORS
+origins = [os.getenv('CORS_ALLOWED_ORIGINS', '*').split(',')]
 
 app.add_middleware(
     CORSMiddleware,
+    allow_origins=origins,
     allow_credentials=True,
-    allow_origins=cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["*"]
 )
+

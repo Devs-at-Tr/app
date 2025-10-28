@@ -69,7 +69,7 @@ class FacebookMessengerClient:
                                 "text": reply.get("message", ""),
                                 "timestamp": reply["created_time"],
                                 "username": reply.get("from", {}).get("name", "Unknown"),
-                                "profile_pic": reply_profile_pic,
+                                "profile_pic_url": reply_profile_pic,
                                 "media_url": reply.get("attachment", {}).get("media", {}).get("image", {}).get("src")
                             })
 
@@ -79,7 +79,7 @@ class FacebookMessengerClient:
                             "text": comment.get("message", ""),
                             "timestamp": comment["created_time"],
                             "username": comment.get("from", {}).get("name", "Unknown"),
-                            "profile_pic": profile_pic,
+                            "profile_pic_url": profile_pic,
                             "replies": replies,
                             "media_url": comment.get("attachment", {}).get("media", {}).get("image", {}).get("src"),
                             "reaction_count": comment.get("reactions", {}).get("summary", {}).get("total_count", 0),
@@ -408,7 +408,7 @@ class FacebookMessengerClient:
                     "text": reply.get("message", ""),
                     "timestamp": reply["created_time"],
                     "username": reply.get("from", {}).get("name", "Unknown"),
-                    "profile_pic": reply.get("from", {}).get("picture", {}).get("data", {}).get("url")
+                    "profile_pic_url": reply.get("from", {}).get("picture", {}).get("data", {}).get("url")
                 } for reply in data]
             else:
                 logger.error(f"Failed to fetch Facebook comment replies: {response.text}")
@@ -568,38 +568,46 @@ class FacebookMessengerClient:
                 "success": True,
                 "id": user_id,
                 "name": f"Mock User {user_id[:8]}",
-                "profile_pic": f"https://via.placeholder.com/150?text={user_id[:8]}",
+                "profile_pic_url": f"https://via.placeholder.com/150?text={user_id[:8]}",
                 "mode": "mock"
             }
         
         # Real Facebook API call
         url = f"{self.BASE_URL}/{user_id}"
         
+        params = {
+            "fields": "id,first_name,last_name,profile_pic",
+            "access_token": page_access_token
+        }
         try:
-            response = await self.client.get(
-                url,
-                params={
-                    "fields": "id,name,profile_pic",
-                    "access_token": page_access_token
-                }
-            )
-            
+            response = await self.client.get(url, params=params)
             if response.status_code == 200:
                 profile_data = response.json()
-                return {
+                first_name = profile_data.get("first_name", "")
+                last_name = profile_data.get("last_name", "")
+                full_name = f"{first_name} {last_name}".strip()
+                if not full_name:
+                    full_name = profile_data.get("name") or f"Facebook User {user_id[:8]}"
+                profile = {
                     "success": True,
-                    **profile_data,
+                    "id": profile_data.get("id", user_id),
+                    "name": full_name,
+                    "first_name": first_name or None,
+                    "last_name": last_name or None,
+                    "profile_pic": profile_data.get("profile_pic"),
+                    "raw": profile_data,
                     "mode": "real"
                 }
-            else:
-                error_data = response.json() if response.content else {}
-                error_message = error_data.get("error", {}).get("message", "Unknown error")
-                logger.error(f"Failed to get Facebook user profile: {error_message}")
-                return {
-                    "success": False,
-                    "error": error_message,
-                    "mode": "real"
-                }
+                return profile
+
+            error_data = response.json() if response.content else {}
+            error_message = error_data.get("error", {}).get("message", "Unknown error")
+            logger.error(f"Failed to get Facebook user profile: {error_message}")
+            return {
+                "success": False,
+                "error": error_message,
+                "mode": "real"
+            }
         
         except Exception as e:
             logger.error(f"Error getting Facebook user profile: {e}")
