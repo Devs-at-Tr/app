@@ -170,21 +170,23 @@ frontend:
 
 metadata:
   created_by: "testing_agent"
-  version: "1.0"
-  test_sequence: 1
-  run_ui: false
+  version: "1.1"
+  test_sequence: 2
+  run_ui: true
 
 test_plan:
   current_focus:
-    - "Instagram Account Management API"
-    - "Instagram Webhook Verification"
-    - "Instagram Webhook Message Processing"
-    - "Cross-Platform Message Sending"
-    - "Platform Filtering"
-  stuck_tasks: []
+    - "Login Flow"
+    - "Dashboard Features"
+    - "Chat Management"
+  stuck_tasks:
+    - "Login Flow"
   test_all: false
   test_priority: "high_first"
 
 agent_communication:
   - agent: "testing"
     message: "Instagram DM integration backend testing completed successfully. All 7 backend tasks are working correctly with 100% test pass rate. The system properly handles Instagram account management, webhook verification and processing, cross-platform messaging, and platform filtering. Authentication system is functional. Backend is ready for production use in mock mode."
+  
+  - agent: "testing"
+    message: "CRITICAL ISSUE FOUND: Frontend UI testing reveals a blocking configuration mismatch. Frontend .env file (REACT_APP_BACKEND_URL) is configured to connect to http://localhost:8000, but the backend service is running on port 8001 (as configured in supervisor). This causes all API calls to fail with ERR_CONNECTION_REFUSED. The frontend UI is fully implemented with proper components, routing, and data-testid attributes for testing. Login page renders correctly, but authentication cannot complete. All dashboard features (stats cards, chat management, platform selector, templates, comments) are implemented but cannot be tested until the backend connection is established. SOLUTION NEEDED: Either (1) configure a proxy/nginx to route port 8000 to 8001, or (2) update frontend/.env to use port 8001, or (3) change backend to run on port 8000."
