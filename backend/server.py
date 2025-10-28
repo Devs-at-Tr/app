@@ -1691,7 +1691,8 @@ app.include_router(api_router)
 # )
 
 # Configure CORS
-origins = [os.getenv('CORS_ALLOWED_ORIGINS', '*').split(',')]
+cors_origins_str = os.getenv('CORS_ORIGINS', '*')
+origins = cors_origins_str.split(',') if cors_origins_str != '*' else ['*']
 
 app.add_middleware(
     CORSMiddleware,
