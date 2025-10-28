@@ -7,9 +7,9 @@ import LoginPage from './pages/LoginPage';
 import DashboardPage from './pages/DashboardPage';
 import SignupPage from './pages/SignupPage';
 
-// Get backend URL from environment or use local development server during testing
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:8000';
-export const API = `${BACKEND_URL}/api`;
+// Get backend URL from environment or use relative path for Kubernetes ingress
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || '';
+export const API = BACKEND_URL ? `${BACKEND_URL}/api` : '/api';
 
 function App() {
   const [user, setUser] = useState(null);
