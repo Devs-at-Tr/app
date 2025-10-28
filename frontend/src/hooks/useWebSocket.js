@@ -30,7 +30,16 @@ const useWebSocket = (token) => {
       }
 
       // Use same backend URL as API but with WebSocket protocol
-      const wsUrl = (process.env.REACT_APP_BACKEND_URL || 'http://localhost:8000').replace('http', 'ws');
+      const backendUrl = process.env.REACT_APP_BACKEND_URL || '';
+      let wsUrl;
+      if (backendUrl) {
+        // If explicit backend URL is provided, use it
+        wsUrl = backendUrl.replace('http', 'ws');
+      } else {
+        // Use current location for relative WebSocket connection (Kubernetes ingress)
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        wsUrl = `${protocol}//${window.location.host}`;
+      }
       const newWs = new WebSocket(`${wsUrl}/messenger/ws?token=${token}`);
       wsRef.current = newWs;
 
