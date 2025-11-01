@@ -1,8 +1,18 @@
-from pydantic import BaseModel, EmailStr, Field
-from typing import Optional, List
+from pydantic import BaseModel, EmailStr, Field, model_validator
+from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
 import pytz
-from models import UserRole, ChatStatus, MessageSender, MessageType, MessagePlatform
+import json
+from models import (
+    UserRole,
+    ChatStatus,
+    MessageSender,
+    MessageType,
+    MessagePlatform,
+    InstagramMessageDirection,
+    InstagramInsightScope,
+    InstagramCommentAction
+)
 
 def convert_to_ist(dt: datetime) -> datetime:
     """Convert UTC datetime to IST"""
@@ -74,6 +84,147 @@ class MessageResponse(BaseModel):
         
     def model_post_init(self, _):
         self.timestamp = convert_to_ist(self.timestamp)
+
+class InstagramUserSchema(BaseModel):
+    igsid: str
+    first_seen_at: datetime
+    last_seen_at: datetime
+    last_message: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+    def model_post_init(self, _):
+        self.first_seen_at = convert_to_ist(self.first_seen_at)
+        self.last_seen_at = convert_to_ist(self.last_seen_at)
+
+class InstagramMessageSchema(BaseModel):
+    id: str
+    igsid: str
+    direction: InstagramMessageDirection
+    text: Optional[str] = None
+    attachments_json: Optional[str] = None
+    ts: int
+    created_at: datetime
+    attachments: List[Dict[str, Any]] = []
+
+    class Config:
+        from_attributes = True
+
+    def model_post_init(self, _):
+        self.created_at = convert_to_ist(self.created_at)
+        if self.attachments_json:
+            try:
+                self.attachments = json.loads(self.attachments_json)
+            except (TypeError, ValueError):
+                self.attachments = []
+        else:
+            self.attachments = []
+
+class InstagramSendRequest(BaseModel):
+    igsid: str = Field(..., description="Instagram scoped user ID")
+    text: Optional[str] = Field(None, description="Message text to send")
+    attachments: Optional[List[Dict[str, Any]]] = Field(
+        default=None,
+        description="Attachment payloads to forward"
+    )
+
+    @property
+    def has_text(self) -> bool:
+        return bool(self.text and self.text.strip())
+
+    @model_validator(mode="after")
+    def validate_payload(cls, values: "InstagramSendRequest") -> "InstagramSendRequest":
+        has_attachments = bool(values.attachments)
+        if not values.has_text and not has_attachments:
+            raise ValueError("Either text or attachments must be provided")
+        return values
+
+class InstagramCommentSchema(BaseModel):
+    id: str
+    media_id: str
+    author_id: Optional[str] = None
+    text: Optional[str] = None
+    hidden: bool = False
+    action: InstagramCommentAction = InstagramCommentAction.CREATED
+    mentioned_user_id: Optional[str] = None
+    attachments_json: Optional[str] = None
+    ts: int
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    attachments: List[Dict[str, Any]] = []
+
+    class Config:
+        from_attributes = True
+
+    def model_post_init(self, _):
+        self.created_at = convert_to_ist(self.created_at)
+        if self.updated_at:
+            self.updated_at = convert_to_ist(self.updated_at)
+        if self.attachments_json:
+            try:
+                self.attachments = json.loads(self.attachments_json)
+            except (TypeError, ValueError):
+                self.attachments = []
+
+class InstagramCommentCreateRequest(BaseModel):
+    media_id: str = Field(..., description="Target Instagram media ID")
+    message: str = Field(..., min_length=1, description="Comment text")
+
+class InstagramCommentHideRequest(BaseModel):
+    comment_id: str = Field(..., description="Comment ID to hide/unhide")
+    hide: bool = Field(..., description="True to hide comment, False to unhide")
+
+class InstagramMarketingEventRequest(BaseModel):
+    event_name: str = Field(..., description="Meta standard event name e.g. Purchase")
+    event_time: int = Field(..., description="Unix timestamp in seconds")
+    value: Optional[float] = Field(None, description="Event monetary value")
+    currency: Optional[str] = Field(None, description="Currency code e.g. INR")
+    user_data: Dict[str, Any] = Field(default_factory=dict)
+    custom_data: Dict[str, Any] = Field(default_factory=dict)
+    event_source_url: Optional[str] = None
+    action_source: Optional[str] = None
+    test_event_code: Optional[str] = None
+    event_id: Optional[str] = Field(None, description="Idempotency key for the event")
+    pixel_id: Optional[str] = Field(None, description="Override Pixel ID, defaults to PIXEL_ID from env")
+
+class InstagramMarketingEventSchema(BaseModel):
+    id: str
+    event_name: str
+    value: Optional[float] = None
+    currency: Optional[str] = None
+    pixel_id: Optional[str] = None
+    external_event_id: Optional[str] = None
+    status: Optional[str] = None
+    ts: int
+    created_at: datetime
+    payload_json: Optional[str] = None
+    response_json: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+    def model_post_init(self, _):
+        self.created_at = convert_to_ist(self.created_at)
+
+class InstagramInsightSchema(BaseModel):
+    id: str
+    scope: InstagramInsightScope
+    entity_id: str
+    period: Optional[str] = None
+    metrics_json: str
+    fetched_at: datetime
+    metrics: Dict[str, Any] = {}
+
+    class Config:
+        from_attributes = True
+
+    def model_post_init(self, _):
+        self.fetched_at = convert_to_ist(self.fetched_at)
+        try:
+            self.metrics = json.loads(self.metrics_json)
+        except (TypeError, ValueError):
+            self.metrics = {}
 
 # Chat Schemas
 class ChatAssign(BaseModel):

@@ -6,6 +6,7 @@ import os
 from typing import Dict, Any, Optional, List
 from datetime import datetime, timezone, timedelta
 from enum import Enum
+import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -16,10 +17,11 @@ class InstagramMode(str, Enum):
 class InstagramClient:
     """Client for Instagram Graph API with mock/real mode support"""
     
-    BASE_URL = "https://graph.facebook.com/v18.0"
-    
     def __init__(self, mode: InstagramMode = None):
         self.mode = mode or InstagramMode(os.getenv("INSTAGRAM_MODE", "mock"))
+        graph_version = os.getenv("GRAPH_VERSION", "v18.0")
+        self.BASE_URL = f"https://graph.facebook.com/{graph_version}"
+        self.skip_signature_check = os.getenv("INSTAGRAM_SKIP_SIGNATURE", "false").lower() in {"1", "true", "yes"}
         
         # Use Facebook app secret for both Facebook and Instagram since they're the same app
         self.app_secret = os.getenv("FACEBOOK_APP_SECRET") or os.getenv("INSTAGRAM_APP_SECRET", "")
@@ -29,7 +31,12 @@ class InstagramClient:
         if self.mode == InstagramMode.REAL and not self.app_secret:
             logger.error("Running in REAL mode but no app secret configured. Instagram API calls will fail.")
         
-        self.verify_token = os.getenv("INSTAGRAM_WEBHOOK_VERIFY_TOKEN") or os.getenv("FACEBOOK_WEBHOOK_VERIFY_TOKEN", "ticklegram_ig_verify")
+        self.verify_token = (
+            os.getenv("INSTAGRAM_WEBHOOK_VERIFY_TOKEN")
+            or os.getenv("FACEBOOK_WEBHOOK_VERIFY_TOKEN")
+            or os.getenv("VERIFY_TOKEN")
+            or "ticklegram_ig_verify"
+        )
         self.timeout = int(os.getenv("INSTAGRAM_WEBHOOK_TIMEOUT", "30"))
         
         # Always initialize the HTTP client regardless of mode
@@ -44,13 +51,27 @@ class InstagramClient:
         if self.client:
             await self.client.aclose()
     
-    def verify_webhook_signature(self, payload: bytes, signature: str) -> bool:
+    def _normalize_signature(self, value: Optional[str], prefix: str) -> Optional[str]:
+        if not value:
+            return None
+        value = value.strip()
+        return value.split(prefix, 1)[1] if value.startswith(prefix) else value
+
+    def verify_webhook_signature(
+        self,
+        payload: bytes,
+        signature_sha256: Optional[str],
+        signature_sha1: Optional[str] = None
+    ) -> bool:
         """Verify webhook signature using HMAC-SHA256 or SHA1"""
         if self.mode == InstagramMode.MOCK:
             logger.info("MOCK MODE: Skipping Instagram webhook signature verification")
             return True
+        if self.skip_signature_check:
+            logger.warning("INSTAGRAM_SKIP_SIGNATURE enabled; skipping webhook signature verification")
+            return True
         
-        if not signature:
+        if not signature_sha256 and not signature_sha1:
             logger.error("No signature provided in Instagram webhook request")
             return False
         
@@ -61,31 +82,27 @@ class InstagramClient:
         try:
             app_secret = self.app_secret.encode('utf-8')
             
-            # Log the incoming signature format
-            logger.debug(f"Received signature: {signature}")
+            header_sha256 = self._normalize_signature(signature_sha256, "sha256=") if signature_sha256 else None
+            header_sha1 = self._normalize_signature(signature_sha1, "sha1=") if signature_sha1 else None
             
-            # Normalize signature by removing any prefix
-            raw_signature = signature.replace('sha256=', '').replace('sha1=', '')
+            sha256_hmac = hmac.new(app_secret, payload, hashlib.sha256).hexdigest()
+            sha1_hmac = hmac.new(app_secret, payload, hashlib.sha1).hexdigest()
             
-            # Calculate both SHA256 and SHA1 hashes
-            sha256_hmac = hmac.new(app_secret, payload, hashlib.sha256)
-            sha1_hmac = hmac.new(app_secret, payload, hashlib.sha1)
+            sha256_ok = header_sha256 and hmac.compare_digest(header_sha256, sha256_hmac)
+            sha1_ok = header_sha1 and hmac.compare_digest(header_sha1, sha1_hmac)
             
-            # Compare with both raw and prefixed formats
-            if any([
-                hmac.compare_digest(f"sha256={sha256_hmac.hexdigest()}", signature),
-                hmac.compare_digest(f"sha1={sha1_hmac.hexdigest()}", signature),
-                hmac.compare_digest(sha256_hmac.hexdigest(), raw_signature),
-                hmac.compare_digest(sha1_hmac.hexdigest(), raw_signature)
-            ]):
+            if sha256_ok or sha1_ok:
                 logger.debug("Signature verified")
                 return True
             
             # Log expected signatures for debugging
-            logger.warning(f"Signature verification failed. Expected SHA256: sha256={sha256_hmac.hexdigest()} or SHA1: sha1={sha1_hmac.hexdigest()}")
-            logger.debug(f"Received signature: {signature}")
-            logger.debug(f"Raw signature (without prefix): {raw_signature}")
-            logger.debug(f"Payload (first 100 bytes): {payload[:100]}")
+            logger.warning(
+                "Signature verification failed. Expected SHA256: sha256=%s or SHA1: sha1=%s",
+                sha256_hmac,
+                sha1_hmac
+            )
+            logger.debug("Received signature headers: sha256=%s, sha1=%s", signature_sha256, signature_sha1)
+            logger.debug("Payload (first 100 bytes): %s", payload[:100])
             return False
         
         except Exception as e:
@@ -102,125 +119,127 @@ class InstagramClient:
         self,
         page_access_token: str,
         recipient_id: str,
-        text: str
+        text: str,
+        page_id: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Send a text message to an Instagram user"""
-        
-        if self.mode == InstagramMode.MOCK:
-            logger.info(f"MOCK MODE: Sending Instagram text message to {recipient_id}: {text}")
-            return {
-                "success": True,
-                "recipient_id": recipient_id,
-                "message_id": f"mock_ig_msg_{datetime.now().timestamp()}",
-                "mode": "mock"
-            }
-        
-        # Real Instagram API call
-        # Instagram uses the page ID (Instagram Account ID) in the URL
-        url = f"{self.BASE_URL}/me/messages"
-        
-        payload = {
-            "recipient": {"id": recipient_id},
-            "message": {"text": text},
-            "access_token": page_access_token
-        }
-        
-        try:
-            response = await self.client.post(url, json=payload)
-            response_data = response.json() if response.content else {}
-            
-            if response.status_code == 200:
-                return {
-                    "success": True,
-                    "recipient_id": response_data.get("recipient_id"),
-                    "message_id": response_data.get("message_id"),
-                    "mode": "real"
-                }
-            else:
-                error_data = response_data.get("error", {})
-                error_code = error_data.get("code")
-                error_message = error_data.get("message", "Unknown error")
-                
-                if error_code == 190:
-                    logger.error("Invalid page access token. Please check your Instagram/Facebook access token")
-                elif error_code == 10 or error_code == 200:
-                    logger.error("Permission error. Make sure your app has the required permissions")
-                
-                logger.error(f"Failed to send Instagram message: {error_message} (Code: {error_code})")
-                return {
-                    "success": False,
-                    "error": error_message,
-                    "error_code": response.status_code,
-                    "mode": "real"
-                }
-        
-        except Exception as e:
-            logger.error(f"Error sending Instagram message: {e}")
-            return {
-                "success": False,
-                "error": str(e),
-                "mode": "real"
-            }
+        """Send a text message to an Instagram user."""
+        return await self.send_dm(
+            page_id=page_id or "me",
+            page_access_token=page_access_token,
+            recipient_id=recipient_id,
+            text=text,
+            attachments=None
+        )
     
     async def send_attachment(
         self,
         page_access_token: str,
         recipient_id: str,
         attachment_type: str,
-        attachment_url: str
+        attachment_url: str,
+        page_id: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Send an attachment (image/video) to an Instagram user"""
-        
+        """Send an attachment (image/video) to an Instagram user."""
+        attachment_payload = {
+            "type": attachment_type,
+            "payload": {
+                "url": attachment_url,
+                "is_reusable": True
+            }
+        }
+        return await self.send_dm(
+            page_id=page_id or "me",
+            page_access_token=page_access_token,
+            recipient_id=recipient_id,
+            text=None,
+            attachments=[attachment_payload]
+        )
+
+    async def send_dm(
+        self,
+        page_id: str,
+        page_access_token: str,
+        recipient_id: str,
+        text: Optional[str] = None,
+        attachments: Optional[List[Dict[str, Any]]] = None
+    ) -> Dict[str, Any]:
+        """Send a DM via the Instagram Messenger API."""
         if self.mode == InstagramMode.MOCK:
-            logger.info(f"MOCK MODE: Sending Instagram {attachment_type} attachment to {recipient_id}")
+            logger.info(
+                "MOCK MODE: Sending Instagram DM to %s via page %s. text=%s attachments=%s",
+                recipient_id,
+                page_id,
+                text,
+                attachments
+            )
             return {
                 "success": True,
                 "recipient_id": recipient_id,
-                "message_id": f"mock_ig_attachment_{datetime.now().timestamp()}",
+                "message_id": f"mock_ig_msg_{datetime.now().timestamp()}",
                 "mode": "mock"
             }
-        
-        # Real Instagram API call
-        url = f"{self.BASE_URL}/me/messages"
-        
+
+        url = f"{self.BASE_URL}/{page_id}/messages"
+
+        message_payload: Dict[str, Any] = {}
+        if text:
+            message_payload["text"] = text
+        if attachments:
+            attachment = attachments[0]
+            attachment_type = attachment.get("type", "image")
+            payload = attachment.get("payload") or {
+                "url": attachment.get("url"),
+                "is_reusable": attachment.get("is_reusable", True)
+            }
+            message_payload["attachment"] = {
+                "type": attachment_type,
+                "payload": payload
+            }
+
+        if not message_payload:
+            return {
+                "success": False,
+                "error": "Message payload is empty. Provide text or attachments.",
+                "mode": "real"
+            }
+
         payload = {
             "recipient": {"id": recipient_id},
-            "message": {
-                "attachment": {
-                    "type": attachment_type,
-                    "payload": {
-                        "url": attachment_url,
-                        "is_reusable": True
-                    }
-                }
-            },
+            "message": message_payload,
+            "messaging_type": "RESPONSE",
             "access_token": page_access_token
         }
-        
+
         try:
             response = await self.client.post(url, json=payload)
-            
+            response_data = response.json() if response.content else {}
+
             if response.status_code == 200:
-                response_data = response.json()
                 return {
                     "success": True,
-                    "recipient_id": response_data.get("recipient_id"),
+                    "recipient_id": response_data.get("recipient_id", recipient_id),
                     "message_id": response_data.get("message_id"),
                     "mode": "real"
                 }
-            else:
-                error_data = response.json() if response.content else {}
-                error_message = error_data.get("error", {}).get("message", "Unknown error")
-                logger.error(f"Failed to send Instagram attachment: {error_message}")
-                return {
-                    "success": False,
-                    "error": error_message,
-                    "error_code": response.status_code,
-                    "mode": "real"
-                }
-        
+
+            error_data = response_data.get("error", {})
+            error_code = error_data.get("code")
+            error_message = error_data.get("message", "Unknown error")
+            logger.error(
+                "Failed to send Instagram DM via page %s: %s (Code: %s)",
+                page_id,
+                error_message,
+                error_code
+            )
+            return {
+                "success": False,
+                "error": error_message,
+                "error_code": response.status_code,
+                "mode": "real"
+            }
+
         except Exception as e:
-            logger.error(f"Error sending Instagram attachment: {e}")
+            logger.error("Error sending Instagram DM: %s", e)
             return {
                 "success": False,
                 "error": str(e),
@@ -631,6 +650,324 @@ class InstagramClient:
             "text": comment_text,
             "mode": "real"
         }
+
+    async def create_comment(
+        self,
+        page_access_token: str,
+        media_id: str,
+        message: str
+    ) -> Dict[str, Any]:
+        """Create a comment on a piece of media."""
+        if self.mode == InstagramMode.MOCK:
+            logger.info("MOCK MODE: Creating Instagram comment")
+            return {
+                "success": True,
+                "id": f"mock_comment_{datetime.now().timestamp()}",
+                "media_id": media_id,
+                "text": message,
+                "mode": "mock"
+            }
+
+        try:
+            response = await self.client.post(
+                f"{self.BASE_URL}/{media_id}/comments",
+                params={"access_token": page_access_token},
+                data={"message": message}
+            )
+            response_data = response.json() if response.content else {}
+            if response.status_code == 200:
+                response_data["success"] = True
+                return response_data
+            logger.error(f"Failed to create comment on media {media_id}: {response.text}")
+            return {"success": False, "error": response_data.get("error")}
+        except Exception as exc:
+            logger.error(f"Error creating Instagram comment: {exc}")
+            return {"success": False, "error": str(exc)}
+
+    async def set_comment_visibility(
+        self,
+        page_access_token: str,
+        comment_id: str,
+        hide: bool
+    ) -> Dict[str, Any]:
+        """Hide or unhide a comment."""
+        if self.mode == InstagramMode.MOCK:
+            logger.info("MOCK MODE: Setting comment visibility")
+            return {"success": True, "comment_id": comment_id, "hidden": hide, "mode": "mock"}
+
+        try:
+            response = await self.client.post(
+                f"{self.BASE_URL}/{comment_id}",
+                params={"access_token": page_access_token},
+                data={"hide": str(hide).lower()}
+            )
+            response_data = response.json() if response.content else {}
+            if response.status_code == 200:
+                response_data["success"] = True
+                response_data["hidden"] = hide
+                return response_data
+            logger.error(f"Failed to update visibility for comment {comment_id}: {response.text}")
+            return {"success": False, "error": response_data.get("error")}
+        except Exception as exc:
+            logger.error(f"Error updating Instagram comment visibility: {exc}")
+            return {"success": False, "error": str(exc)}
+
+    async def delete_comment(
+        self,
+        page_access_token: str,
+        comment_id: str
+    ) -> Dict[str, Any]:
+        """Delete an Instagram comment."""
+        if self.mode == InstagramMode.MOCK:
+            logger.info("MOCK MODE: Deleting Instagram comment")
+            return {"success": True, "deleted": True, "comment_id": comment_id}
+
+        try:
+            response = await self.client.delete(
+                f"{self.BASE_URL}/{comment_id}",
+                params={"access_token": page_access_token}
+            )
+            response_data = response.json() if response.content else {}
+            if response.status_code == 200:
+                response_data["success"] = True
+                return response_data
+            logger.error(f"Failed to delete comment {comment_id}: {response.text}")
+            return {"success": False, "error": response_data.get("error")}
+        except Exception as exc:
+            logger.error(f"Error deleting Instagram comment: {exc}")
+            return {"success": False, "error": str(exc)}
+
+    async def get_mentions(
+        self,
+        page_access_token: str,
+        user_id: str
+    ) -> Dict[str, Any]:
+        """Fetch media where the business account was mentioned."""
+        if self.mode == InstagramMode.MOCK:
+            logger.info("MOCK MODE: Getting Instagram mentions for %s", user_id)
+            return {
+                "success": True,
+                "data": [
+                    {
+                        "id": f"mention_{datetime.now().timestamp()}",
+                        "media_type": "IMAGE",
+                        "media_url": "https://picsum.photos/seed/mention/800",
+                        "timestamp": datetime.now(timezone.utc).isoformat()
+                    }
+                ],
+                "mode": "mock"
+            }
+
+        response = await self.client.get(
+            f"{self.BASE_URL}/{user_id}/mentioned_media",
+            params={
+                "fields": "id,caption,media_type,media_url,permalink,timestamp",
+                "access_token": page_access_token
+            }
+        )
+        response_data = response.json() if response.content else {}
+        if response.status_code == 200:
+            response_data["success"] = True
+            return response_data
+
+        logger.error(f"Failed to fetch mentioned media for {user_id}: {response.text}")
+        return {"success": False, "error": response_data.get("error")}
+
+    async def get_account_insights(
+        self,
+        page_access_token: str,
+        user_id: str,
+        metrics: str,
+        period: str = "day"
+    ) -> Dict[str, Any]:
+        """Fetch account level insights."""
+        if self.mode == InstagramMode.MOCK:
+            logger.info("MOCK MODE: Returning account insights")
+            return {
+                "success": True,
+                "data": [
+                    {
+                        "name": metric,
+                        "period": period,
+                        "values": [{"value": 1234, "end_time": datetime.now(timezone.utc).isoformat()}]
+                    }
+                    for metric in metrics.split(",")
+                ],
+                "mode": "mock"
+            }
+
+        response = await self.client.get(
+            f"{self.BASE_URL}/{user_id}/insights",
+            params={
+                "metric": metrics,
+                "period": period,
+                "access_token": page_access_token
+            }
+        )
+        response_data = response.json() if response.content else {}
+        if response.status_code == 200:
+            response_data["success"] = True
+            return response_data
+
+        logger.error(f"Failed to fetch account insights for {user_id}: {response.text}")
+        return {"success": False, "error": response_data.get("error")}
+
+    async def get_media_insights(
+        self,
+        page_access_token: str,
+        media_id: str,
+        metrics: str
+    ) -> Dict[str, Any]:
+        """Fetch insights for a media item."""
+        if self.mode == InstagramMode.MOCK:
+            logger.info("MOCK MODE: Returning media insights")
+            return {
+                "success": True,
+                "data": [
+                    {
+                        "name": metric,
+                        "values": [{"value": 456, "end_time": datetime.now(timezone.utc).isoformat()}]
+                    }
+                    for metric in metrics.split(",")
+                ],
+                "mode": "mock"
+            }
+
+        response = await self.client.get(
+            f"{self.BASE_URL}/{media_id}/insights",
+            params={
+                "metric": metrics,
+                "access_token": page_access_token
+            }
+        )
+        response_data = response.json() if response.content else {}
+        if response.status_code == 200:
+            response_data["success"] = True
+            return response_data
+
+        logger.error(f"Failed to fetch media insights for {media_id}: {response.text}")
+        return {"success": False, "error": response_data.get("error")}
+
+    async def get_story_insights(
+        self,
+        page_access_token: str,
+        story_id: str,
+        metrics: str
+    ) -> Dict[str, Any]:
+        """Fetch insights for a story."""
+        if self.mode == InstagramMode.MOCK:
+            logger.info("MOCK MODE: Returning story insights")
+            return {
+                "success": True,
+                "data": [
+                    {
+                        "name": metric,
+                        "values": [{"value": 78, "end_time": datetime.now(timezone.utc).isoformat()}]
+                    }
+                    for metric in metrics.split(",")
+                ],
+                "mode": "mock"
+            }
+
+        response = await self.client.get(
+            f"{self.BASE_URL}/{story_id}/insights",
+            params={
+                "metric": metrics,
+                "access_token": page_access_token
+            }
+        )
+        response_data = response.json() if response.content else {}
+        if response.status_code == 200:
+            response_data["success"] = True
+            return response_data
+
+        logger.error(f"Failed to fetch story insights for {story_id}: {response.text}")
+        return {"success": False, "error": response_data.get("error")}
+
+    async def get_comment_details(
+        self,
+        page_access_token: str,
+        comment_id: str
+    ) -> Dict[str, Any]:
+        """Fetch a single comment's details."""
+        if self.mode == InstagramMode.MOCK:
+            logger.info("MOCK MODE: Getting comment details for %s", comment_id)
+            return {
+                "success": True,
+                "id": comment_id,
+                "text": "Mock comment",
+                "media": {"id": "mock_media_id"},
+                "from": {"id": "mock_user"},
+                "hidden": False,
+                "mode": "mock"
+            }
+
+        response = await self.client.get(
+            f"{self.BASE_URL}/{comment_id}",
+            params={
+                "fields": "id,text,user,from,hidden,parent_id,media{id}",
+                "access_token": page_access_token
+            }
+        )
+        response_data = response.json() if response.content else {}
+        if response.status_code == 200:
+            response_data["success"] = True
+            return response_data
+
+        logger.error(f"Failed to fetch comment details for {comment_id}: {response.text}")
+        return {"success": False, "error": response_data.get("error")}
+
+    async def send_marketing_event(
+        self,
+        pixel_id: str,
+        access_token: str,
+        payload: Dict[str, Any],
+        max_retries: int = 3,
+        base_backoff: float = 1.0
+    ) -> Dict[str, Any]:
+        """Send events to the Meta Conversions API with retry handling."""
+        if self.mode == InstagramMode.MOCK:
+            logger.info("MOCK MODE: Sending marketing event for pixel %s", pixel_id)
+            return {"success": True, "mode": "mock", "payload": payload}
+
+        url = f"{self.BASE_URL}/{pixel_id}/events"
+        attempt = 0
+        while attempt < max_retries:
+            attempt += 1
+            try:
+                response = await self.client.post(
+                    url,
+                    params={"access_token": access_token},
+                    json=payload
+                )
+                response_data = response.json() if response.content else {}
+                if response.status_code == 200:
+                    return {"success": True, "response": response_data}
+
+                status = response.status_code
+                should_retry = status == 429 or status >= 500
+                logger.warning(
+                    "Conversions API call failed (status=%s, attempt=%s): %s",
+                    status,
+                    attempt,
+                    response_data
+                )
+                if not should_retry or attempt >= max_retries:
+                    return {
+                        "success": False,
+                        "status": status,
+                        "error": response_data.get("error", response_data)
+                    }
+
+                await asyncio.sleep(base_backoff * attempt)
+
+            except httpx.HTTPError as http_error:
+                logger.error("HTTP error when sending marketing event: %s", http_error)
+                if attempt >= max_retries:
+                    return {"success": False, "error": str(http_error)}
+                await asyncio.sleep(base_backoff * attempt)
+
+        return {"success": False, "error": "Exceeded retry attempts"}
 
 # Global Instagram client instance
 instagram_client = InstagramClient()

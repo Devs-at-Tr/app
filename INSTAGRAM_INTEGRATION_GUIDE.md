@@ -24,6 +24,26 @@ This guide explains how to configure and use the Instagram DM integration in Tic
 - `GET /api/webhooks/instagram` - Webhook verification
 - `POST /api/webhooks/instagram` - Receive Instagram DMs
 
+### Real-Time DM Streaming
+- `/webhook` (GET/POST) exposed without the `/api` prefix for Meta's webhook subscription.
+- `/messages/send` (POST) sends Instagram DMs using the Page access token defined in `.env`.
+- WebSocket broadcasts include `type: "ig_dm"` (legacy `instagram_dm`) with direction, igsid, text, attachments, timestamp, and delivery status.
+- Offline agents receive queued DM events automatically on reconnect.
+- Persistent storage uses the `instagram_users` and `instagram_messages` tables to keep history.
+
+? **Instagram Comments & Mentions**
+- CRUD helpers for comments exposed via `/api/comments/create|hide|delete`.
+- Mentions feed available at `/api/instagram/mentions`.
+- Webhook ingestion stores rows in `instagram_comments` and emits `type: "ig_comment"` events.
+
+? **Instagram Insights**
+- Account/media/story insights fetched through `/api/insights/{scope}`.
+- Results cached in `instagram_insights` and broadcast as `type: "ig_insights"` payloads.
+
+? **Marketing Events (Conversions API)**
+- `/api/marketing/events` forwards purchase/lead/etc. to Meta Pixel with retries and idempotency.
+- Events persisted in `instagram_marketing_events` and streamed as `type: "ig_marketing_event"`.
+
 ✅ **Cross-Platform Message Sending**
 - Unified message sending through `POST /api/chats/{id}/message`
 - Auto-detects platform (Instagram/Facebook)
@@ -53,6 +73,12 @@ INSTAGRAM_MODE=mock                           # Use 'mock' for dev, 'real' for p
 INSTAGRAM_APP_SECRET=${FACEBOOK_APP_SECRET}   # Uses same app as Facebook
 INSTAGRAM_WEBHOOK_VERIFY_TOKEN=${FACEBOOK_WEBHOOK_VERIFY_TOKEN}
 INSTAGRAM_WEBHOOK_TIMEOUT=30
+INSTAGRAM_PAGE_ID=your-instagram-page-id
+INSTAGRAM_PAGE_ACCESS_TOKEN=your-instagram-page-access-token
+VERIFY_TOKEN=your-instagram-verify-token
+PIXEL_ID=your-meta-pixel-id
+GRAPH_VERSION=v21.0
+INSTAGRAM_SKIP_SIGNATURE=false          # Set true only for debugging signature issues
 ```
 
 #### Frontend (.env)
@@ -184,12 +210,77 @@ DELETE /api/instagram/accounts/{id}     # Disconnect account
 ```
 GET    /api/webhooks/instagram          # Webhook verification
 POST   /api/webhooks/instagram          # Receive Instagram messages
+GET    /webhook                         # Public verification endpoint
+POST   /webhook                         # Public webhook receiver (messages/comments)
 ```
 
 ### Cross-Platform Messaging
 ```
 POST   /api/chats/{id}/message          # Send message (auto-detects platform)
 GET    /api/chats?platform=instagram    # Filter chats by platform
+POST   /messages/send                   # Direct Instagram DM send
+POST   /api/messages/send               # (legacy alias)
+```
+
+### Instagram Comments & Mentions
+```
+POST   /api/comments/create             # Create comment on media
+POST   /api/comments/hide               # Hide/Unhide comment
+DELETE /api/comments/delete             # Delete comment
+GET    /api/instagram/mentions          # Fetch mentioned media stream
+```
+
+### Instagram Insights
+```
+GET    /api/insights/account            # Account insights (metrics & period query params)
+GET    /api/insights/media              # Media insights (media_id, metrics)
+GET    /api/insights/story              # Story insights (story_id, metrics)
+```
+
+### Marketing Events (Conversions API)
+```
+POST   /api/marketing/events            # Forward marketing events to Meta Pixel
+```
+
+## cURL Samples
+
+> Replace placeholders (`GRAPH_VERSION`, `PAGE_ACCESS_TOKEN`, `IG_MEDIA_ID`, etc.) before executing.
+
+```bash
+# Create comment
+curl -X POST "https://graph.facebook.com/GRAPH_VERSION/IG_MEDIA_ID/comments" \
+  -d "message=Great post! 🎯" \
+  -d "access_token=PAGE_ACCESS_TOKEN"
+
+# Hide or unhide comment
+curl -X POST "https://graph.facebook.com/GRAPH_VERSION/COMMENT_ID" \
+  -d "hide=true" \
+  -d "access_token=PAGE_ACCESS_TOKEN"
+
+# Delete comment
+curl -X DELETE "https://graph.facebook.com/GRAPH_VERSION/COMMENT_ID?access_token=PAGE_ACCESS_TOKEN"
+
+# Send DM
+curl -X POST "https://graph.facebook.com/GRAPH_VERSION/PAGE_ID/messages" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "recipient": { "id": "IG_SCOPED_USER_ID" },
+    "message": { "text": "Hello from our app 👋" }
+  }' \
+  -d "access_token=PAGE_ACCESS_TOKEN"
+
+# Marketing event via Conversions API
+curl -X POST "https://graph.facebook.com/GRAPH_VERSION/PIXEL_ID/events" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "data": [{
+      "event_name":"Purchase","event_time":1730440000,
+      "user_data":{"client_ip_address":"1.2.3.4","client_user_agent":"UA"},
+      "custom_data":{"currency":"INR","value":4999}
+    }],
+    "test_event_code":"TEST123"
+  }' \
+  -d "access_token=SYSTEM_OR_PAGE_TOKEN"
 ```
 
 ## Architecture

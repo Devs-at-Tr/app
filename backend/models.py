@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, DateTime, ForeignKey, Enum as SQLEnum, Text, Integer, Boolean
+from sqlalchemy import Column, String, DateTime, ForeignKey, Enum as SQLEnum, Text, Integer, Boolean, BigInteger, Float
 from sqlalchemy.orm import relationship
 from database import Base
 from datetime import datetime, timezone
@@ -29,6 +29,21 @@ class MessageType(str, enum.Enum):
 class MessagePlatform(str, enum.Enum):
     INSTAGRAM = "INSTAGRAM"
     FACEBOOK = "FACEBOOK"
+
+class InstagramMessageDirection(str, enum.Enum):
+    INBOUND = "inbound"
+    OUTBOUND = "outbound"
+
+class InstagramInsightScope(str, enum.Enum):
+    ACCOUNT = "account"
+    MEDIA = "media"
+    STORY = "story"
+    PROFILE = "profile"
+
+class InstagramCommentAction(str, enum.Enum):
+    CREATED = "created"
+    UPDATED = "updated"
+    DELETED = "deleted"
 
 class User(Base):
     __tablename__ = "users"
@@ -119,3 +134,66 @@ class MessageTemplate(Base):
     updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
     
     creator = relationship("User", foreign_keys=[created_by])
+
+class InstagramUser(Base):
+    __tablename__ = "instagram_users"
+
+    igsid = Column(String(255), primary_key=True)
+    first_seen_at = Column(DateTime(timezone=True), default=utc_now)
+    last_seen_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+    last_message = Column(Text, nullable=True)
+
+    messages = relationship("InstagramMessage", back_populates="user", cascade="all, delete-orphan")
+
+class InstagramMessage(Base):
+    __tablename__ = "instagram_messages"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    igsid = Column(String(255), ForeignKey("instagram_users.igsid"), nullable=False, index=True)
+    direction = Column(SQLEnum(InstagramMessageDirection), nullable=False)
+    text = Column(Text, nullable=True)
+    attachments_json = Column(Text, nullable=True)
+    ts = Column(BigInteger, nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), default=utc_now)
+
+    user = relationship("InstagramUser", back_populates="messages")
+
+class InstagramComment(Base):
+    __tablename__ = "instagram_comments"
+
+    id = Column(String(255), primary_key=True)
+    media_id = Column(String(255), nullable=False, index=True)
+    author_id = Column(String(255), nullable=True, index=True)
+    text = Column(Text, nullable=True)
+    hidden = Column(Boolean, default=False)
+    action = Column(SQLEnum(InstagramCommentAction), nullable=False, default=InstagramCommentAction.CREATED)
+    mentioned_user_id = Column(String(255), nullable=True)
+    attachments_json = Column(Text, nullable=True)
+    ts = Column(BigInteger, nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), default=utc_now)
+    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+class InstagramMarketingEvent(Base):
+    __tablename__ = "instagram_marketing_events"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    event_name = Column(String(120), nullable=False)
+    value = Column(Float, nullable=True)
+    currency = Column(String(10), nullable=True)
+    pixel_id = Column(String(255), nullable=True)
+    external_event_id = Column(String(255), nullable=True, unique=True)
+    status = Column(String(50), nullable=True)
+    payload_json = Column(Text, nullable=True)
+    response_json = Column(Text, nullable=True)
+    ts = Column(BigInteger, nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), default=utc_now)
+
+class InstagramInsight(Base):
+    __tablename__ = "instagram_insights"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    scope = Column(SQLEnum(InstagramInsightScope), nullable=False)
+    entity_id = Column(String(255), nullable=False, index=True)
+    period = Column(String(50), nullable=True)
+    metrics_json = Column(Text, nullable=False)
+    fetched_at = Column(DateTime(timezone=True), default=utc_now, index=True)

@@ -1,10 +1,11 @@
 from fastapi import FastAPI, APIRouter, Depends, HTTPException, status, Header, Request, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session, joinedload
-from typing import List, Optional, Set
+from typing import List, Optional, Set, Dict, Any
 from websocket_manager import manager as ws_manager
 import os
 import logging
+import json
 from pathlib import Path
 from dotenv import load_dotenv
 import random
@@ -12,7 +13,27 @@ import asyncio
 from datetime import datetime, timezone, timedelta
 
 from database import engine, get_db, Base
-from models import User, InstagramAccount, Chat, Message, UserRole, ChatStatus, MessageSender, MessageType, FacebookPage, MessagePlatform, MessageTemplate
+from models import (
+    User,
+    InstagramAccount,
+    Chat,
+    Message,
+    UserRole,
+    ChatStatus,
+    MessageSender,
+    MessageType,
+    FacebookPage,
+    MessagePlatform,
+    MessageTemplate,
+    InstagramUser,
+    InstagramMessage,
+    InstagramMessageDirection,
+    InstagramComment,
+    InstagramCommentAction,
+    InstagramMarketingEvent,
+    InstagramInsight,
+    InstagramInsightScope
+)
 from schemas import (
     UserRegister, UserLogin, UserResponse, TokenResponse,
     InstagramConnect, InstagramAccountResponse,
@@ -20,7 +41,17 @@ from schemas import (
     ChatAssign, ChatResponse, ChatWithMessages,
     DashboardStats,
     FacebookPageConnect, FacebookPageResponse, FacebookPageUpdate,
-    MessageTemplateCreate, MessageTemplateUpdate, MessageTemplateResponse, TemplateSendRequest
+    MessageTemplateCreate,
+    MessageTemplateUpdate,
+    MessageTemplateResponse,
+    TemplateSendRequest,
+    InstagramSendRequest,
+    InstagramCommentCreateRequest,
+    InstagramCommentHideRequest,
+    InstagramMarketingEventRequest,
+    InstagramMarketingEventSchema,
+    InstagramCommentSchema,
+    InstagramInsightSchema
 )
 from auth import verify_password, get_password_hash, create_access_token, decode_access_token
 from facebook_api import facebook_client, FacebookMode
@@ -28,6 +59,12 @@ from instagram_api import instagram_client, InstagramMode
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
+
+INSTAGRAM_PAGE_ID = os.getenv("INSTAGRAM_PAGE_ID") or os.getenv("PAGE_ID") or os.getenv("FACEBOOK_PAGE_ID")
+INSTAGRAM_PAGE_ACCESS_TOKEN = os.getenv("INSTAGRAM_PAGE_ACCESS_TOKEN") or os.getenv("PAGE_ACCESS_TOKEN") or os.getenv("FACEBOOK_PAGE_ACCESS_TOKEN")
+INSTAGRAM_VERIFY_TOKEN = os.getenv("VERIFY_TOKEN") or os.getenv("INSTAGRAM_WEBHOOK_VERIFY_TOKEN") or os.getenv("FACEBOOK_WEBHOOK_VERIFY_TOKEN")
+PIXEL_ID = os.getenv("PIXEL_ID")
+GRAPH_VERSION = os.getenv("GRAPH_VERSION", "v18.0")
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
@@ -49,6 +86,114 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+def resolve_instagram_access_token(db: Session, page_id: Optional[str]) -> Optional[str]:
+    """Resolve the best access token for an Instagram page."""
+    token: Optional[str] = None
+    if page_id:
+        account = db.query(InstagramAccount).filter(InstagramAccount.page_id == page_id).first()
+        if account and account.access_token:
+            token = account.access_token
+    if not token:
+        token = INSTAGRAM_PAGE_ACCESS_TOKEN
+    return token
+
+def gather_dm_notify_users(db: Session, chat: Optional[Chat] = None) -> Set[str]:
+    """Collect user IDs that should receive DM notifications."""
+    notify_users: Set[str] = set()
+    if chat and chat.assigned_to:
+        notify_users.add(str(chat.assigned_to))
+
+    admin_users = db.query(User).filter(User.role == UserRole.ADMIN).all()
+    notify_users.update(str(user.id) for user in admin_users)
+    return notify_users
+
+def gather_admin_user_ids(db: Session) -> Set[str]:
+    """Return IDs for all admin users."""
+    admin_users = db.query(User).filter(User.role == UserRole.ADMIN).all()
+    return {str(user.id) for user in admin_users}
+
+def upsert_instagram_comment(
+    db: Session,
+    comment_id: str,
+    media_id: str,
+    author_id: Optional[str],
+    text: Optional[str],
+    hidden: bool,
+    action: InstagramCommentAction,
+    mentioned_user_id: Optional[str],
+    ts: int,
+    attachments: Optional[Dict[str, Any]] = None
+) -> InstagramComment:
+    """Create or update an Instagram comment record."""
+    comment = db.query(InstagramComment).filter(InstagramComment.id == comment_id).first()
+    if comment:
+        comment.media_id = media_id
+        comment.author_id = author_id
+        comment.text = text
+        comment.hidden = hidden
+        comment.action = action
+        comment.mentioned_user_id = mentioned_user_id
+        comment.ts = ts
+        if attachments:
+            comment.attachments_json = json.dumps(attachments)
+    else:
+        comment = InstagramComment(
+            id=comment_id,
+            media_id=media_id,
+            author_id=author_id,
+            text=text,
+            hidden=hidden,
+            action=action,
+            mentioned_user_id=mentioned_user_id,
+            ts=ts,
+            attachments_json=json.dumps(attachments) if attachments else None
+        )
+        db.add(comment)
+    return comment
+
+def resolve_default_instagram_account(db: Session, current_user: Optional[User] = None) -> Optional[InstagramAccount]:
+    """Return a default Instagram account for API operations."""
+    query = db.query(InstagramAccount)
+    if current_user and current_user.role != UserRole.ADMIN:
+        query = query.filter(InstagramAccount.user_id == current_user.id)
+    return query.first()
+
+def persist_instagram_insight(
+    db: Session,
+    scope: InstagramInsightScope,
+    entity_id: str,
+    metrics: Dict[str, Any],
+    period: Optional[str] = None
+) -> InstagramInsight:
+    """Store an Instagram insight snapshot."""
+    insight = InstagramInsight(
+        scope=scope,
+        entity_id=entity_id,
+        period=period,
+        metrics_json=json.dumps(metrics),
+        fetched_at=datetime.now(timezone.utc)
+    )
+    db.add(insight)
+    db.commit()
+    db.refresh(insight)
+    return insight
+
+def build_insight_metrics(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert Graph API insight response to a simple metric dictionary."""
+    metrics: Dict[str, Any] = {}
+    for entry in data.get("data", []):
+        name = entry.get("name")
+        values = entry.get("values", [])
+        latest_value = None
+        if values:
+            last_entry = values[-1]
+            if isinstance(last_entry, dict):
+                latest_value = last_entry.get("value")
+            else:
+                latest_value = last_entry
+        metrics[name] = latest_value
+    return metrics
 
 # Dependency to get current user from token
 async def get_current_user(authorization: Optional[str] = Header(None), db: Session = Depends(get_db)) -> User:
@@ -305,6 +450,431 @@ async def reply_to_instagram_comment(
         logger.error(f"Error replying to Instagram comment: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@api_router.post("/comments/create", response_model=InstagramCommentSchema)
+async def create_instagram_comment(
+    payload: InstagramCommentCreateRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Create a comment on an Instagram media item."""
+    account = resolve_default_instagram_account(db, current_user)
+    page_id = account.page_id if account else INSTAGRAM_PAGE_ID
+    if not page_id:
+        raise HTTPException(status_code=400, detail="No Instagram page configured")
+
+    page_access_token = resolve_instagram_access_token(db, page_id)
+    if not page_access_token:
+        raise HTTPException(status_code=400, detail="Instagram page access token not configured")
+
+    result = await instagram_client.create_comment(
+        page_access_token=page_access_token,
+        media_id=payload.media_id,
+        message=payload.message
+    )
+    if not result.get("success"):
+        error = result.get("error", {"message": "Failed to create comment"})
+        raise HTTPException(status_code=502, detail=error.get("message", "Failed to create comment"))
+
+    comment_id = result.get("id") or result.get("comment_id")
+    timestamp_seconds = int(datetime.now(timezone.utc).timestamp())
+    author_id = page_id
+
+    comment_record = upsert_instagram_comment(
+        db=db,
+        comment_id=comment_id,
+        media_id=payload.media_id,
+        author_id=author_id,
+        text=payload.message,
+        hidden=False,
+        action=InstagramCommentAction.CREATED,
+        mentioned_user_id=None,
+        ts=timestamp_seconds,
+        attachments=None
+    )
+    db.commit()
+    db.refresh(comment_record)
+
+    await ws_manager.broadcast_global({
+        "type": "ig_comment",
+        "action": comment_record.action.value,
+        "media_id": comment_record.media_id,
+        "comment_id": comment_record.id,
+        "text": comment_record.text,
+        "author_id": comment_record.author_id,
+        "hidden": comment_record.hidden,
+        "timestamp": comment_record.ts,
+        "source": "api"
+    })
+
+    return InstagramCommentSchema.model_validate(comment_record)
+
+@api_router.post("/comments/hide", response_model=InstagramCommentSchema)
+async def hide_instagram_comment(
+    payload: InstagramCommentHideRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Hide or unhide an Instagram comment."""
+    account = resolve_default_instagram_account(db, current_user)
+    page_id = account.page_id if account else INSTAGRAM_PAGE_ID
+    if not page_id:
+        raise HTTPException(status_code=400, detail="No Instagram page configured")
+    page_access_token = resolve_instagram_access_token(db, page_id)
+    if not page_access_token:
+        raise HTTPException(status_code=400, detail="Instagram page access token not configured")
+
+    result = await instagram_client.set_comment_visibility(
+        page_access_token=page_access_token,
+        comment_id=payload.comment_id,
+        hide=payload.hide
+    )
+    if not result.get("success"):
+        error = result.get("error", {"message": "Failed to update comment visibility"})
+        raise HTTPException(status_code=502, detail=error.get("message", "Failed to update comment visibility"))
+
+    details = await instagram_client.get_comment_details(page_access_token, payload.comment_id)
+    media_id = details.get("media", {}).get("id") if details.get("success") else None
+    author_id = None
+    if details.get("success"):
+        from_data = details.get("from") or details.get("user") or {}
+        if isinstance(from_data, dict):
+            author_id = from_data.get("id")
+
+    existing = db.query(InstagramComment).filter(InstagramComment.id == payload.comment_id).first()
+    if not media_id:
+        media_id = existing.media_id if existing else ""
+
+    timestamp_seconds = int(datetime.now(timezone.utc).timestamp())
+
+    comment_record = upsert_instagram_comment(
+        db=db,
+        comment_id=payload.comment_id,
+        media_id=media_id,
+        author_id=author_id if author_id else (existing.author_id if existing else None),
+        text=details.get("text") if details.get("success") else (existing.text if existing else None),
+        hidden=payload.hide,
+        action=InstagramCommentAction.UPDATED,
+        mentioned_user_id=existing.mentioned_user_id if existing else None,
+        ts=timestamp_seconds,
+        attachments=None
+    )
+    db.commit()
+    db.refresh(comment_record)
+
+    await ws_manager.broadcast_global({
+        "type": "ig_comment",
+        "action": comment_record.action.value,
+        "media_id": comment_record.media_id,
+        "comment_id": comment_record.id,
+        "text": comment_record.text,
+        "author_id": comment_record.author_id,
+        "hidden": comment_record.hidden,
+        "timestamp": comment_record.ts,
+        "source": "api"
+    })
+
+    return InstagramCommentSchema.model_validate(comment_record)
+
+@api_router.delete("/comments/delete", response_model=Dict[str, Any])
+async def delete_instagram_comment(
+    comment_id: str = Query(..., description="Comment ID to delete"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Delete an Instagram comment."""
+    account = resolve_default_instagram_account(db, current_user)
+    page_id = account.page_id if account else INSTAGRAM_PAGE_ID
+    if not page_id:
+        raise HTTPException(status_code=400, detail="No Instagram page configured")
+    page_access_token = resolve_instagram_access_token(db, page_id)
+    if not page_access_token:
+        raise HTTPException(status_code=400, detail="Instagram page access token not configured")
+
+    result = await instagram_client.delete_comment(
+        page_access_token=page_access_token,
+        comment_id=comment_id
+    )
+    if not result.get("success"):
+        error = result.get("error", {"message": "Failed to delete comment"})
+        raise HTTPException(status_code=502, detail=error.get("message", "Failed to delete comment"))
+
+    timestamp_seconds = int(datetime.now(timezone.utc).timestamp())
+    existing = db.query(InstagramComment).filter(InstagramComment.id == comment_id).first()
+    media_id = existing.media_id if existing else ""
+
+    comment_record = upsert_instagram_comment(
+        db=db,
+        comment_id=comment_id,
+        media_id=media_id,
+        author_id=existing.author_id if existing else None,
+        text=existing.text if existing else None,
+        hidden=True,
+        action=InstagramCommentAction.DELETED,
+        mentioned_user_id=existing.mentioned_user_id if existing else None,
+        ts=timestamp_seconds,
+        attachments=None
+    )
+    db.commit()
+
+    await ws_manager.broadcast_global({
+        "type": "ig_comment",
+        "action": comment_record.action.value,
+        "media_id": comment_record.media_id,
+        "comment_id": comment_record.id,
+        "text": comment_record.text,
+        "author_id": comment_record.author_id,
+        "hidden": comment_record.hidden,
+        "timestamp": comment_record.ts,
+        "source": "api"
+    })
+
+    return {"success": True, "comment_id": comment_id}
+
+@api_router.get("/instagram/mentions")
+async def list_instagram_mentions(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    ig_user_id: Optional[str] = Query(None, description="Instagram business account ID to query")
+):
+    """Fetch media where the business account is mentioned."""
+    account = resolve_default_instagram_account(db, current_user)
+    page_id = ig_user_id or (account.page_id if account else INSTAGRAM_PAGE_ID)
+    if not page_id:
+        raise HTTPException(status_code=400, detail="No Instagram account available for mentions")
+
+    page_access_token = resolve_instagram_access_token(db, page_id)
+    if not page_access_token:
+        raise HTTPException(status_code=400, detail="Instagram access token not configured")
+
+    mentions = await instagram_client.get_mentions(
+        page_access_token=page_access_token,
+        user_id=page_id
+    )
+    if not mentions.get("success"):
+        error = mentions.get("error", {"message": "Failed to fetch mentions"})
+        raise HTTPException(status_code=502, detail=error.get("message", "Failed to fetch mentions"))
+
+    payload = {
+        "type": "ig_comment",
+        "action": "mentioned",
+        "media": mentions.get("data", []),
+        "timestamp": int(datetime.now(timezone.utc).timestamp()),
+    }
+    await ws_manager.broadcast_global(payload)
+
+    return mentions
+
+@api_router.get("/insights/account", response_model=InstagramInsightSchema)
+async def get_account_insights(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    ig_user_id: Optional[str] = Query(None, description="Instagram business account ID"),
+    metrics: str = Query("impressions,reach,profile_views", description="Comma separated list of metrics"),
+    period: str = Query("day", description="Insights period e.g. day, week, month")
+):
+    """Fetch account-level Instagram insights."""
+    account = resolve_default_instagram_account(db, current_user)
+    page_id = ig_user_id or (account.page_id if account else INSTAGRAM_PAGE_ID)
+    if not page_id:
+        raise HTTPException(status_code=400, detail="No Instagram business account configured")
+
+    page_access_token = resolve_instagram_access_token(db, page_id)
+    if not page_access_token:
+        raise HTTPException(status_code=400, detail="Instagram access token not configured")
+
+    response = await instagram_client.get_account_insights(
+        page_access_token=page_access_token,
+        user_id=page_id,
+        metrics=metrics,
+        period=period
+    )
+    if not response.get("success"):
+        error = response.get("error", {"message": "Failed to fetch insights"})
+        raise HTTPException(status_code=502, detail=error.get("message", "Failed to fetch insights"))
+
+    metric_map = build_insight_metrics(response)
+    insight_record = persist_instagram_insight(
+        db=db,
+        scope=InstagramInsightScope.ACCOUNT,
+        entity_id=page_id,
+        metrics=metric_map,
+        period=period
+    )
+
+    await ws_manager.broadcast_global({
+        "type": "ig_insights",
+        "scope": "account",
+        "entity_id": page_id,
+        "metrics": metric_map,
+        "timestamp": int(insight_record.fetched_at.timestamp())
+    })
+
+    return InstagramInsightSchema.model_validate(insight_record)
+
+@api_router.get("/insights/media", response_model=InstagramInsightSchema)
+async def get_media_insights(
+    media_id: str = Query(..., description="Instagram media ID"),
+    metrics: str = Query("impressions,reach,engagement,saved", description="Comma separated metrics"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Fetch media-level Instagram insights."""
+    account = resolve_default_instagram_account(db, current_user)
+    page_id = account.page_id if account else INSTAGRAM_PAGE_ID
+    if not page_id:
+        raise HTTPException(status_code=400, detail="No Instagram business account configured")
+
+    page_access_token = resolve_instagram_access_token(db, page_id)
+    if not page_access_token:
+        raise HTTPException(status_code=400, detail="Instagram access token not configured")
+
+    response = await instagram_client.get_media_insights(
+        page_access_token=page_access_token,
+        media_id=media_id,
+        metrics=metrics
+    )
+    if not response.get("success"):
+        error = response.get("error", {"message": "Failed to fetch media insights"})
+        raise HTTPException(status_code=502, detail=error.get("message", "Failed to fetch media insights"))
+
+    metric_map = build_insight_metrics(response)
+    insight_record = persist_instagram_insight(
+        db=db,
+        scope=InstagramInsightScope.MEDIA,
+        entity_id=media_id,
+        metrics=metric_map
+    )
+
+    await ws_manager.broadcast_global({
+        "type": "ig_insights",
+        "scope": "media",
+        "entity_id": media_id,
+        "metrics": metric_map,
+        "timestamp": int(insight_record.fetched_at.timestamp())
+    })
+
+    return InstagramInsightSchema.model_validate(insight_record)
+
+@api_router.get("/insights/story", response_model=InstagramInsightSchema)
+async def get_story_insights(
+    story_id: str = Query(..., description="Instagram story ID"),
+    metrics: str = Query("impressions,reach,exits,replies", description="Comma separated metrics"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Fetch story-level Instagram insights."""
+    account = resolve_default_instagram_account(db, current_user)
+    page_id = account.page_id if account else INSTAGRAM_PAGE_ID
+    if not page_id:
+        raise HTTPException(status_code=400, detail="No Instagram business account configured")
+
+    page_access_token = resolve_instagram_access_token(db, page_id)
+    if not page_access_token:
+        raise HTTPException(status_code=400, detail="Instagram access token not configured")
+
+    response = await instagram_client.get_story_insights(
+        page_access_token=page_access_token,
+        story_id=story_id,
+        metrics=metrics
+    )
+    if not response.get("success"):
+        error = response.get("error", {"message": "Failed to fetch story insights"})
+        raise HTTPException(status_code=502, detail=error.get("message", "Failed to fetch story insights"))
+
+    metric_map = build_insight_metrics(response)
+    insight_record = persist_instagram_insight(
+        db=db,
+        scope=InstagramInsightScope.STORY,
+        entity_id=story_id,
+        metrics=metric_map
+    )
+
+    await ws_manager.broadcast_global({
+        "type": "ig_insights",
+        "scope": "story",
+        "entity_id": story_id,
+        "metrics": metric_map,
+        "timestamp": int(insight_record.fetched_at.timestamp())
+    })
+
+    return InstagramInsightSchema.model_validate(insight_record)
+
+@api_router.post("/marketing/events", response_model=InstagramMarketingEventSchema)
+async def send_marketing_event(
+    payload: InstagramMarketingEventRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Forward marketing events to the Meta Conversions API."""
+    pixel_id = payload.pixel_id or PIXEL_ID
+    if not pixel_id:
+        raise HTTPException(status_code=400, detail="PIXEL_ID is not configured")
+
+    account = resolve_default_instagram_account(db, current_user)
+    page_id = account.page_id if account else INSTAGRAM_PAGE_ID
+    access_token = resolve_instagram_access_token(db, page_id)
+    if not access_token:
+        raise HTTPException(status_code=400, detail="Instagram page access token not available")
+
+    # Prepare Conversions API payload
+    custom_data = dict(payload.custom_data or {})
+    if payload.value is not None:
+        custom_data.setdefault("value", payload.value)
+    if payload.currency:
+        custom_data.setdefault("currency", payload.currency)
+
+    event_entry: Dict[str, Any] = {
+        "event_name": payload.event_name,
+        "event_time": payload.event_time,
+        "user_data": payload.user_data or {},
+        "custom_data": custom_data
+    }
+    if payload.event_source_url:
+        event_entry["event_source_url"] = payload.event_source_url
+    if payload.action_source:
+        event_entry["action_source"] = payload.action_source
+    if payload.event_id:
+        event_entry["event_id"] = payload.event_id
+
+    event_payload: Dict[str, Any] = {"data": [event_entry]}
+    if payload.test_event_code:
+        event_payload["test_event_code"] = payload.test_event_code
+
+    result = await instagram_client.send_marketing_event(
+        pixel_id=pixel_id,
+        access_token=access_token,
+        payload=event_payload
+    )
+
+    status = "success" if result.get("success") else "failed"
+    response_json = result.get("response") if result.get("success") else result.get("error")
+
+    marketing_event = InstagramMarketingEvent(
+        event_name=payload.event_name,
+        value=payload.value,
+        currency=payload.currency,
+        pixel_id=pixel_id,
+        external_event_id=payload.event_id,
+        status=status,
+        payload_json=json.dumps(event_payload),
+        response_json=json.dumps(response_json) if response_json else None,
+        ts=payload.event_time
+    )
+    db.add(marketing_event)
+    db.commit()
+    db.refresh(marketing_event)
+
+    await ws_manager.broadcast_global({
+        "type": "ig_marketing_event",
+        "event_name": payload.event_name,
+        "value": payload.value,
+        "currency": payload.currency,
+        "ts": payload.event_time,
+        "status": status
+    })
+
+    return InstagramMarketingEventSchema.model_validate(marketing_event)
+
 @api_router.get("/facebook/comments")
 async def list_facebook_comments(
     current_user: User = Depends(get_current_user),
@@ -533,6 +1103,18 @@ def delete_instagram_account(
     return {"success": True, "message": "Instagram account disconnected"}
 
 # Instagram Webhook Endpoints
+def _verify_instagram_webhook_subscription(hub_mode: str, hub_challenge: str, hub_verify_token: str):
+    if instagram_client.verify_webhook_token(hub_mode, hub_verify_token):
+        logger.info("Instagram webhook verification successful via client")
+        return int(hub_challenge) if hub_challenge.isdigit() else hub_challenge
+
+    if hub_mode == "subscribe" and INSTAGRAM_VERIFY_TOKEN and hub_verify_token == INSTAGRAM_VERIFY_TOKEN:
+        logger.info("Instagram webhook verification successful via fallback token")
+        return int(hub_challenge) if hub_challenge.isdigit() else hub_challenge
+
+    logger.warning("Instagram webhook verification failed")
+    raise HTTPException(status_code=403, detail="Verification failed")
+
 @api_router.get("/webhooks/instagram")
 async def verify_instagram_webhook(
     request: Request,
@@ -542,144 +1124,439 @@ async def verify_instagram_webhook(
 ):
     """Verify Instagram webhook subscription"""
     
-    if instagram_client.verify_webhook_token(hub_mode, hub_verify_token):
-        logger.info("Instagram webhook verification successful")
-        return int(hub_challenge) if hub_challenge.isdigit() else hub_challenge
-    else:
-        logger.warning("Instagram webhook verification failed")
-        raise HTTPException(status_code=403, detail="Verification failed")
+    return _verify_instagram_webhook_subscription(hub_mode, hub_challenge, hub_verify_token)
+
+@app.get("/webhook")
+async def instagram_dm_verify(
+    hub_mode: str = Query("", alias="hub.mode"),
+    hub_challenge: str = Query("", alias="hub.challenge"),
+    hub_verify_token: str = Query("", alias="hub.verify_token")
+):
+    """Meta webhook verification handler for Instagram DMs."""
+    return _verify_instagram_webhook_subscription(hub_mode, hub_challenge, hub_verify_token)
+
+async def _handle_instagram_webhook(request: Request, db: Session) -> Dict[str, Any]:
+    """Shared webhook handler for Instagram DM events."""
+    try:
+        body = await request.body()
+        signature_sha256 = request.headers.get("X-Hub-Signature-256")
+        signature_sha1 = request.headers.get("X-Hub-Signature")
+
+        if instagram_client.mode != InstagramMode.MOCK and not instagram_client.verify_webhook_signature(
+            body,
+            signature_sha256,
+            signature_sha1
+        ):
+            logger.warning("Invalid Instagram webhook signature")
+            raise HTTPException(status_code=401, detail="Invalid signature")
+
+        data = await request.json()
+        logger.info(f"Received Instagram webhook: {data.get('object')}")
+
+        processed_events = 0
+
+        if data.get("object") != "instagram":
+            logger.info("Ignoring non-Instagram webhook payload")
+            return {"status": "ignored"}
+
+        for entry in data.get("entry", []):
+            instagram_account_id = entry.get("id")
+            if not instagram_account_id:
+                continue
+
+            page_access_token = resolve_instagram_access_token(db, instagram_account_id)
+            if not page_access_token:
+                logger.warning(f"No access token found for Instagram account {instagram_account_id}")
+                continue
+
+            for messaging_event in entry.get("messaging", []):
+                message_data = messaging_event.get("message")
+                if not message_data:
+                    continue
+
+                sender_id = messaging_event.get("sender", {}).get("id")
+                recipient_id = messaging_event.get("recipient", {}).get("id")
+                if not sender_id or not recipient_id:
+                    continue
+
+                is_echo = message_data.get("is_echo", False)
+                direction = InstagramMessageDirection.OUTBOUND if is_echo or sender_id == instagram_account_id else InstagramMessageDirection.INBOUND
+                igsid = sender_id if direction == InstagramMessageDirection.INBOUND else recipient_id
+
+                processed_payload = await instagram_client.process_webhook_message(
+                    sender_id=sender_id,
+                    recipient_id=recipient_id,
+                    message_data=message_data,
+                    instagram_account_id=instagram_account_id
+                )
+
+                attachments = processed_payload.get("attachments") or []
+                if not isinstance(attachments, list):
+                    attachments = [attachments]
+                text_content = processed_payload.get("text") or ""
+
+                raw_timestamp = messaging_event.get("timestamp") or int(datetime.now(timezone.utc).timestamp() * 1000)
+                timestamp_seconds = int(raw_timestamp / 1000)
+                event_datetime = datetime.fromtimestamp(timestamp_seconds, tz=timezone.utc)
+
+                last_message_preview = text_content or ("[attachment]" if attachments else None)
+
+                instagram_user = db.query(InstagramUser).filter(InstagramUser.igsid == igsid).first()
+                if not instagram_user:
+                    instagram_user = InstagramUser(
+                        igsid=igsid,
+                        first_seen_at=event_datetime,
+                        last_seen_at=event_datetime,
+                        last_message=last_message_preview
+                    )
+                    db.add(instagram_user)
+                else:
+                    instagram_user.last_seen_at = event_datetime
+                    if last_message_preview:
+                        instagram_user.last_message = last_message_preview
+
+                ig_message = InstagramMessage(
+                    igsid=igsid,
+                    direction=direction,
+                    text=text_content,
+                    attachments_json=json.dumps(attachments) if attachments else None,
+                    ts=timestamp_seconds,
+                    created_at=event_datetime
+                )
+                db.add(ig_message)
+
+                chat: Optional[Chat] = None
+                new_message: Optional[Message] = None
+
+                if direction == InstagramMessageDirection.INBOUND:
+                    chat = db.query(Chat).filter(
+                        Chat.instagram_user_id == sender_id,
+                        Chat.platform == MessagePlatform.INSTAGRAM,
+                        Chat.facebook_page_id == instagram_account_id
+                    ).first()
+
+                    if not chat:
+                        profile = await instagram_client.get_user_profile(
+                            page_access_token=page_access_token,
+                            user_id=sender_id
+                        )
+                        username = profile.get("username") or profile.get("name") or f"IG User {sender_id[:8]}"
+                        profile_pic_url = profile.get("profile_pic_url") or profile.get("profile_pic")
+                        if not profile_pic_url:
+                            profile_pic_url = f"https://via.placeholder.com/150?text={sender_id[:8]}"
+
+                        chat = Chat(
+                            instagram_user_id=sender_id,
+                            username=username,
+                            profile_pic_url=profile_pic_url,
+                            platform=MessagePlatform.INSTAGRAM,
+                            facebook_page_id=instagram_account_id,
+                            status=ChatStatus.UNASSIGNED
+                        )
+                        db.add(chat)
+                        db.flush()
+
+                    new_message = Message(
+                        chat_id=chat.id,
+                        sender=MessageSender.INSTAGRAM_USER,
+                        content=text_content,
+                        message_type=MessageType.TEXT,
+                        platform=MessagePlatform.INSTAGRAM,
+                        timestamp=event_datetime
+                    )
+                    db.add(new_message)
+
+                    chat.last_message = text_content
+                    chat.unread_count += 1
+                    chat.updated_at = event_datetime
+
+                db.flush()
+                db.commit()
+
+                db.refresh(ig_message)
+                if new_message:
+                    db.refresh(new_message)
+
+                notify_users = set()
+                if direction == InstagramMessageDirection.INBOUND:
+                    notify_users = gather_dm_notify_users(db, chat)
+                else:
+                    existing_chat = db.query(Chat).filter(
+                        Chat.instagram_user_id == igsid,
+                        Chat.platform == MessagePlatform.INSTAGRAM
+                    ).first()
+                    notify_users = gather_dm_notify_users(db, existing_chat)
+
+                # Broadcast legacy chat payload for inbound messages
+                if new_message and notify_users:
+                    message_payload = MessageResponse.model_validate(new_message).model_dump(mode="json")
+                    await ws_manager.broadcast_to_users(notify_users, {
+                        "type": "new_message",
+                        "chat_id": str(chat.id),
+                        "platform": chat.platform.value,
+                        "sender_id": sender_id,
+                        "message": message_payload
+                    })
+
+                # Broadcast DM payload
+                dm_payload = {
+                    "type": "ig_dm",
+                    "legacy_type": "instagram_dm",
+                    "direction": direction.value,
+                    "igsid": igsid,
+                    "text": text_content,
+                    "attachments": attachments,
+                    "timestamp": timestamp_seconds,
+                    "message_id": ig_message.id,
+                    "page_id": instagram_account_id,
+                    "delivery_status": "received" if direction == InstagramMessageDirection.INBOUND else "delivered"
+                }
+
+                if notify_users:
+                    await ws_manager.broadcast_to_users(notify_users, dm_payload)
+
+                processed_events += 1
+
+            for change in entry.get("changes", []):
+                field = change.get("field")
+                value = change.get("value", {})
+                if field not in {"comments", "mention", "mentions"}:
+                    continue
+
+                comment_id = value.get("id") or value.get("comment_id")
+                media_id = value.get("media_id") or value.get("parent_id") or value.get("post_id")
+                if not comment_id or not media_id:
+                    logger.debug("Skipping comment webhook change lacking IDs: %s", value)
+                    continue
+
+                verb = value.get("verb") or value.get("action") or "add"
+                action_map = {
+                    "add": InstagramCommentAction.CREATED,
+                    "edited": InstagramCommentAction.UPDATED,
+                    "update": InstagramCommentAction.UPDATED,
+                    "delete": InstagramCommentAction.DELETED,
+                    "remove": InstagramCommentAction.DELETED
+                }
+                action = action_map.get(verb.lower(), InstagramCommentAction.CREATED)
+
+                author_id = None
+                from_data = value.get("from") or value.get("user") or {}
+                if isinstance(from_data, dict):
+                    author_id = from_data.get("id")
+
+                mentioned_user_id = None
+                to_data = value.get("to") or {}
+                if isinstance(to_data, dict):
+                    mentioned_user_id = to_data.get("id")
+
+                text = value.get("text") or value.get("message")
+                hidden = bool(value.get("hidden", False))
+                raw_ts = value.get("timestamp") or value.get("created_time") or int(datetime.now(timezone.utc).timestamp() * 1000)
+                if raw_ts > 10**12:
+                    timestamp_seconds = int(raw_ts / 1000)
+                else:
+                    timestamp_seconds = int(raw_ts)
+                comment_ts = timestamp_seconds
+
+                comment_record = upsert_instagram_comment(
+                    db=db,
+                    comment_id=comment_id,
+                    media_id=media_id,
+                    author_id=author_id,
+                    text=text,
+                    hidden=hidden,
+                    action=action,
+                    mentioned_user_id=mentioned_user_id,
+                    ts=comment_ts,
+                    attachments=None
+                )
+                db.commit()
+                db.refresh(comment_record)
+
+                comment_payload = {
+                    "type": "ig_comment",
+                    "action": comment_record.action.value,
+                    "media_id": comment_record.media_id,
+                    "comment_id": comment_record.id,
+                    "text": comment_record.text,
+                    "author_id": comment_record.author_id,
+                    "hidden": comment_record.hidden,
+                    "timestamp": comment_record.ts,
+                    "mentioned_user_id": comment_record.mentioned_user_id
+                }
+
+                await ws_manager.broadcast_global(comment_payload)
+                processed_events += 1
+
+        return {"status": "received", "processed_events": processed_events}
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Error processing Instagram webhook: {exc}", exc_info=True)
+        # Return 200 to avoid Facebook retrying
+        return {"status": "error", "message": str(exc)}
 
 @api_router.post("/webhooks/instagram")
 async def handle_instagram_webhook(request: Request, db: Session = Depends(get_db)):
     """Handle incoming Instagram webhook"""
-    try:
-        # Get raw body for signature verification
-        body = await request.body()
-        signature = request.headers.get("X-Hub-Signature-256") or request.headers.get("X-Hub-Signature", "")
-        
-        # Verify signature (skip in mock mode)
-        if not instagram_client.verify_webhook_signature(body, signature):
-            logger.warning("Invalid Instagram webhook signature")
-            raise HTTPException(status_code=401, detail="Invalid signature")
-        
-        # Parse webhook data
-        data = await request.json()
-        logger.info(f"Received Instagram webhook: {data.get('object')}")
-        
-        # Process webhook entries
-        if data.get("object") == "instagram":
-            for entry in data.get("entry", []):
-                instagram_account_id = entry.get("id")
-                
-                # Get Instagram account from database
-                ig_account = db.query(InstagramAccount).filter(
-                    InstagramAccount.page_id == instagram_account_id
-                ).first()
-                
-                if not ig_account:
-                    logger.warning(f"Received webhook for unknown Instagram account: {instagram_account_id}")
-                    continue
-                
-                # Process messaging events
-                for messaging_event in entry.get("messaging", []):
-                    sender_id = messaging_event.get("sender", {}).get("id")
-                    recipient_id = messaging_event.get("recipient", {}).get("id")
-                    
-                    # Skip if message is from the business account itself (echo)
-                    if sender_id == instagram_account_id:
-                        continue
-                    
-                    # Handle message
-                    if "message" in messaging_event:
-                        message_data = messaging_event["message"]
-                        
-                        # Process message
-                        processed = await instagram_client.process_webhook_message(
-                            sender_id=sender_id,
-                            recipient_id=recipient_id,
-                            message_data=message_data,
-                            instagram_account_id=instagram_account_id
-                        )
-                        
-                        # Find or create chat
-                        chat = db.query(Chat).filter(
-                            Chat.instagram_user_id == sender_id,
-                            Chat.platform == MessagePlatform.INSTAGRAM,
-                            Chat.facebook_page_id == instagram_account_id
-                        ).first()
-                        
-                        if not chat:
-                            # Get user profile
-                            profile = await instagram_client.get_user_profile(
-                                page_access_token=ig_account.access_token,
-                                user_id=sender_id
-                            )
-                            username = profile.get("username") or profile.get("name") or f"IG User {sender_id[:8]}"
-                            
-                            # Create new chat
-                            # Choose a sensible placeholder for profile picture when unavailable
-                            profile_pic_url = profile.get("profile_pic_url") if isinstance(profile, dict) else None
-                            if not profile_pic_url:
-                                profile_pic_url = f"https://via.placeholder.com/150?text={sender_id[:8]}"
+    return await _handle_instagram_webhook(request, db)
 
-                            chat = Chat(
-                                instagram_user_id=sender_id,
-                                username=username,
-                                profile_pic_url=profile_pic_url,
-                                platform=MessagePlatform.INSTAGRAM,
-                                facebook_page_id=instagram_account_id,
-                                status=ChatStatus.UNASSIGNED
-                            )
-                            db.add(chat)
-                            db.flush()
-                        
-                        # Create message
-                        new_message = Message(
-                            chat_id=chat.id,
-                            sender=MessageSender.INSTAGRAM_USER,
-                            content=processed.get("text", ""),
-                            message_type=MessageType.TEXT,
-                            platform=MessagePlatform.INSTAGRAM
-                        )
-                        db.add(new_message)
-                        
-                        # Update chat
-                        chat.last_message = processed.get("text", "")
-                        chat.unread_count += 1
-                        chat.updated_at = datetime.now(timezone.utc)
-                        
-                        db.commit()
-                        db.refresh(new_message)
-                        logger.info(f"Processed Instagram message from {sender_id} on account {instagram_account_id}")
-                        
-                        # Notify relevant users about new message
-                        notify_users = set()
-                        
-                        # Add assigned agent if any
-                        if chat.assigned_to:
-                            notify_users.add(str(chat.assigned_to))
-                        
-                        # Add admin users
-                        admin_users = db.query(User).filter(User.role == UserRole.ADMIN).all()
-                        notify_users.update(str(user.id) for user in admin_users)
-                        
-                        message_payload = MessageResponse.model_validate(new_message).model_dump(mode="json")
+@app.post("/webhook")
+async def instagram_dm_webhook(request: Request, db: Session = Depends(get_db)):
+    """Unified webhook entrypoint for Meta subscriptions."""
+    return await _handle_instagram_webhook(request, db)
 
-                        # Broadcast new message notification
-                        await ws_manager.broadcast_to_users(notify_users, {
-                            "type": "new_message",
-                            "chat_id": str(chat.id),
-                            "platform": chat.platform.value,
-                            "sender_id": sender_id,
-                            "message": message_payload
-                        })
-        
-        return {"status": "received"}
-    
-    except Exception as e:
-        logger.error(f"Error processing Instagram webhook: {e}")
-        # Return 200 to avoid Instagram retrying
-        return {"status": "error", "message": str(e)}
+@app.post("/messages/send")
+@app.post("/send", include_in_schema=False)
+async def instagram_dm_send(
+    payload: InstagramSendRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Send an Instagram DM via the Meta Graph API."""
+    page_id = INSTAGRAM_PAGE_ID
+
+    chat = db.query(Chat).filter(
+        Chat.instagram_user_id == payload.igsid,
+        Chat.platform == MessagePlatform.INSTAGRAM
+    ).first()
+
+    if chat and chat.facebook_page_id:
+        page_id = chat.facebook_page_id
+
+    if not page_id:
+        raise HTTPException(status_code=400, detail="Instagram page ID not configured")
+
+    page_access_token = resolve_instagram_access_token(db, page_id)
+    if not page_access_token:
+        raise HTTPException(status_code=500, detail="Instagram page access token missing")
+
+    send_result = await instagram_client.send_dm(
+        page_id=page_id,
+        page_access_token=page_access_token,
+        recipient_id=payload.igsid,
+        text=payload.text if payload.has_text else None,
+        attachments=payload.attachments
+    )
+
+    if not send_result.get("success"):
+        error_message = send_result.get("error", "Failed to send message")
+        logger.error(f"Failed to send Instagram DM to {payload.igsid}: {error_message}")
+        raise HTTPException(status_code=502, detail=error_message)
+
+    now_utc = datetime.now(timezone.utc)
+    timestamp_seconds = int(now_utc.timestamp())
+    attachments_json = json.dumps(payload.attachments) if payload.attachments else None
+    message_content = payload.text or ("[attachment]" if payload.attachments else "")
+    last_message_preview = message_content or None
+
+    instagram_user = db.query(InstagramUser).filter(InstagramUser.igsid == payload.igsid).first()
+    if not instagram_user:
+        instagram_user = InstagramUser(
+            igsid=payload.igsid,
+            first_seen_at=now_utc,
+            last_seen_at=now_utc,
+            last_message=last_message_preview
+        )
+        db.add(instagram_user)
+    else:
+        instagram_user.last_seen_at = now_utc
+        if last_message_preview:
+            instagram_user.last_message = last_message_preview
+
+    outbound_message = InstagramMessage(
+        igsid=payload.igsid,
+        direction=InstagramMessageDirection.OUTBOUND,
+        text=payload.text,
+        attachments_json=attachments_json,
+        ts=timestamp_seconds,
+        created_at=now_utc
+    )
+    db.add(outbound_message)
+
+    if not chat:
+        profile = await instagram_client.get_user_profile(
+            page_access_token=page_access_token,
+            user_id=payload.igsid
+        )
+        username = profile.get("username") or profile.get("name") or f"IG User {payload.igsid[:8]}"
+        profile_pic_url = profile.get("profile_pic_url") or profile.get("profile_pic")
+        if not profile_pic_url:
+            profile_pic_url = f"https://via.placeholder.com/150?text={payload.igsid[:8]}"
+
+        chat = Chat(
+            instagram_user_id=payload.igsid,
+            username=username,
+            profile_pic_url=profile_pic_url,
+            platform=MessagePlatform.INSTAGRAM,
+            facebook_page_id=page_id,
+            status=ChatStatus.UNASSIGNED
+        )
+        db.add(chat)
+        db.flush()
+    else:
+        if not chat.facebook_page_id:
+            chat.facebook_page_id = page_id
+
+    if last_message_preview:
+        chat.last_message = last_message_preview
+    chat.updated_at = now_utc
+
+    message_record = Message(
+        chat_id=chat.id,
+        sender=MessageSender.AGENT,
+        content=message_content,
+        message_type=MessageType.TEXT,
+        platform=MessagePlatform.INSTAGRAM,
+        timestamp=now_utc
+    )
+    db.add(message_record)
+
+    db.flush()
+    db.commit()
+
+    db.refresh(outbound_message)
+    db.refresh(message_record)
+    db.refresh(chat)
+
+    notify_users = gather_dm_notify_users(db, chat)
+
+    # Broadcast chat message event
+    if notify_users:
+        message_payload = MessageResponse.model_validate(message_record).model_dump(mode="json")
+        await ws_manager.broadcast_to_users(notify_users, {
+            "type": "new_message",
+            "chat_id": str(chat.id),
+            "platform": chat.platform.value,
+            "sender": MessageSender.AGENT.value,
+            "message": message_payload
+        })
+
+        dm_payload = {
+            "type": "ig_dm",
+            "legacy_type": "instagram_dm",
+            "direction": InstagramMessageDirection.OUTBOUND.value,
+            "igsid": payload.igsid,
+            "text": payload.text,
+            "attachments": payload.attachments or [],
+            "timestamp": timestamp_seconds,
+            "message_id": outbound_message.id,
+            "graph_message_id": send_result.get("message_id"),
+            "page_id": page_id,
+            "delivery_status": "sent",
+            "sent_by": str(current_user.id)
+        }
+        await ws_manager.broadcast_to_users(notify_users, dm_payload)
+
+    logger.info(f"Instagram DM sent to {payload.igsid} by user {current_user.id}")
+    return {
+        "success": True,
+        "message_id": outbound_message.id,
+        "graph_message_id": send_result.get("message_id"),
+        "timestamp": timestamp_seconds,
+        "igsid": payload.igsid
+    }
 
 # ============= CHAT ENDPOINTS =============
 
