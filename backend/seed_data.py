@@ -83,6 +83,7 @@ def seed_database():
             chat = Chat(
                 instagram_user_id=ig_user_id,
                 username=username,
+                profile_pic_url=f"https://via.placeholder.com/150?text={ig_user_id[:8]}",
                 last_message=messages_pool[i],
                 status=ChatStatus.ASSIGNED if i < 3 else ChatStatus.UNASSIGNED,
                 assigned_to=agent1.id if i < 2 else (agent2.id if i == 2 else None),

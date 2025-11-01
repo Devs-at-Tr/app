@@ -55,6 +55,7 @@ def generate_mock_chats(
             id=str(uuid.uuid4()),
             instagram_user_id=user_id,
             username=username,
+            profile_pic_url=f"https://via.placeholder.com/150?text={user_id[:8]}",
             platform=chat_platform,
             status=ChatStatus.UNASSIGNED,
             facebook_page_id=mock_ig_account.page_id if chat_platform == MessagePlatform.INSTAGRAM else None,

@@ -617,9 +617,15 @@ async def handle_instagram_webhook(request: Request, db: Session = Depends(get_d
                             username = profile.get("username") or profile.get("name") or f"IG User {sender_id[:8]}"
                             
                             # Create new chat
+                            # Choose a sensible placeholder for profile picture when unavailable
+                            profile_pic_url = profile.get("profile_pic_url") if isinstance(profile, dict) else None
+                            if not profile_pic_url:
+                                profile_pic_url = f"https://via.placeholder.com/150?text={sender_id[:8]}"
+
                             chat = Chat(
                                 instagram_user_id=sender_id,
                                 username=username,
+                                profile_pic_url=profile_pic_url,
                                 platform=MessagePlatform.INSTAGRAM,
                                 facebook_page_id=instagram_account_id,
                                 status=ChatStatus.UNASSIGNED
@@ -1511,9 +1517,17 @@ async def handle_facebook_webhook(request: Request, db: Session = Depends(get_db
                             username = profile.get("name", f"FB User {sender_id[:8]}")
                             
                             # Create new chat
+                            profile_pic_url = profile.get("profile_pic") if isinstance(profile, dict) else None
+                            # Support older get_user_profile shapes (profile_pic vs profile_pic_url)
+                            if not profile_pic_url:
+                                profile_pic_url = profile.get("profile_pic_url") if isinstance(profile, dict) else None
+                            if not profile_pic_url:
+                                profile_pic_url = f"https://via.placeholder.com/150?text={sender_id[:8]}"
+
                             chat = Chat(
                                 instagram_user_id=sender_id,
                                 username=username,
+                                profile_pic_url=profile_pic_url,
                                 platform=MessagePlatform.FACEBOOK,
                                 facebook_page_id=page_id,
                                 status=ChatStatus.UNASSIGNED
