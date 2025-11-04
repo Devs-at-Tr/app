@@ -44,6 +44,14 @@ This guide explains how to configure and use the Instagram DM integration in Tic
 - `/api/marketing/events` forwards purchase/lead/etc. to Meta Pixel with retries and idempotency.
 - Events persisted in `instagram_marketing_events` and streamed as `type: "ig_marketing_event"`.
 
+### Webhook Hardening Checklist
+- Configure a **single Meta app** for production webhooks; unsubscribe any other app IDs from the Page / IG business user.
+- Set both `FACEBOOK_APP_SECRET` and `INSTAGRAM_APP_SECRET` explicitly in every environment. Optional `INSTAGRAM_APP_SECRET_ALT` lets you accept a second secret during transitions—clear it afterward.
+- On startup the backend logs the last six characters of the in-use secret; verify all workers show the same suffix.
+- Leave `INSTAGRAM_HMAC_DEBUG=false` for normal operation. Flip to `true` temporarily if you need the server to log header digests, computed digests, and payload lengths for mismatched signatures.
+- Keep `INSTAGRAM_SKIP_SIGNATURE=false`. Only use `true` as a short-term bypass while diagnosing HMAC issues, then revert.
+- Meta test payloads often report `entry.id = "0"`; the backend now ignores these so they no longer clutter logs.
+
 ✅ **Cross-Platform Message Sending**
 - Unified message sending through `POST /api/chats/{id}/message`
 - Auto-detects platform (Instagram/Facebook)
@@ -70,8 +78,9 @@ This guide explains how to configure and use the Instagram DM integration in Tic
 ```env
 # Instagram Configuration
 INSTAGRAM_MODE=mock                           # Use 'mock' for dev, 'real' for production
-INSTAGRAM_APP_SECRET=${FACEBOOK_APP_SECRET}   # Uses same app as Facebook
-INSTAGRAM_WEBHOOK_VERIFY_TOKEN=${FACEBOOK_WEBHOOK_VERIFY_TOKEN}
+INSTAGRAM_APP_SECRET=your-facebook-app-secret
+INSTAGRAM_APP_SECRET_ALT=
+INSTAGRAM_WEBHOOK_VERIFY_TOKEN=your-instagram-webhook-verify-token
 INSTAGRAM_WEBHOOK_TIMEOUT=30
 INSTAGRAM_PAGE_ID=your-instagram-page-id
 INSTAGRAM_PAGE_ACCESS_TOKEN=your-instagram-page-access-token
@@ -79,6 +88,7 @@ VERIFY_TOKEN=your-instagram-verify-token
 PIXEL_ID=your-meta-pixel-id
 GRAPH_VERSION=v21.0
 INSTAGRAM_SKIP_SIGNATURE=false          # Set true only for debugging signature issues
+INSTAGRAM_HMAC_DEBUG=false              # Enable verbose HMAC diagnostics temporarily
 ```
 
 #### Frontend (.env)

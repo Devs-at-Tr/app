@@ -1,8 +1,8 @@
 import os
+import re
 import httpx
 import logging
-from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from fastapi import HTTPException
 
 logger = logging.getLogger(__name__)
@@ -18,8 +18,10 @@ class MetaTemplateAPI:
         if not self.app_id or not self.app_secret:
             logger.error("FACEBOOK_APP_ID or FACEBOOK_APP_SECRET not set in environment")
 
-    async def _get_access_token(self, page_id: str) -> str:
-        """Get page access token from Meta"""
+    async def _get_access_token(self, page_id: str, existing_token: Optional[str] = None) -> str:
+        """Get page access token from Meta or reuse an existing one"""
+        if existing_token:
+            return existing_token
         try:
             url = f"{self.base_url}/{page_id}"
             params = {
@@ -36,39 +38,75 @@ class MetaTemplateAPI:
             logger.error(f"Access token not found in Meta response: {str(e)}")
             raise HTTPException(status_code=500, detail="Invalid response from Meta API")
 
-    async def submit_template(self, page_id: str, template_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _slugify_name(self, name: str) -> str:
+        slug = re.sub(r'[^a-z0-9_]', '_', name.lower())
+        slug = re.sub(r'_+', '_', slug).strip('_')
+        if not slug:
+            slug = 'template'
+        return slug[:50]
+
+    def _prepare_body_component(self, content: str) -> Dict[str, Any]:
+        placeholder_order: List[str] = []
+
+        def replace(match: re.Match) -> str:
+            key = match.group(1).strip()
+            if key not in placeholder_order:
+                placeholder_order.append(key)
+            index = placeholder_order.index(key) + 1
+            return f"{{{{{index}}}}}"
+
+        normalized_text = re.sub(r'{([^{}]+)}', replace, content)
+
+        example_defaults = {
+            'username': 'John Doe',
+            'first_name': 'John',
+            'last_name': 'Doe',
+            'platform': 'Instagram',
+            'date': 'Jan 1, 2025',
+            'time': '10:00 AM',
+            'order_id': '12345',
+            'code': '123456',
+        }
+
+        example_row = []
+        for placeholder in placeholder_order:
+            example_row.append(example_defaults.get(placeholder.lower(), 'Example value'))
+
+        body_component: Dict[str, Any] = {
+            'type': 'BODY',
+            'text': normalized_text,
+        }
+
+        if example_row:
+            body_component['example'] = {
+                'body_text': [example_row]
+            }
+
+        return body_component
+
+    async def submit_template(self, page_id: str, template_data: Dict[str, Any], page_access_token: Optional[str] = None) -> Dict[str, Any]:
         """Submit a template to Meta for approval"""
         try:
             # Get page access token
-            access_token = await self._get_access_token(page_id)
+            access_token = await self._get_access_token(page_id, page_access_token)
             
             url = f"{self.base_url}/{page_id}/message_templates"
             
             # Convert our template format to Meta's format
             # Sanitize and validate inputs
-            name = template_data['name'][:50]  # Meta has a length limit
+            name = self._slugify_name(template_data['name'])
             category = template_data['category']
             content = template_data['content']
             
-            # Prepare example text
-            example_text = content.replace('{username}', 'John Doe')
-            if '{platform}' in content:
-                example_text = example_text.replace('{platform}', 'WhatsApp')
-                
+            # Prepare template components with placeholder mapping
+            body_component = self._prepare_body_component(content)
+            
             # Construct Meta template format
             meta_template = {
                 'name': name,
                 'category': category,
-                'language': 'en',
-                'components': [
-                    {
-                        'type': 'BODY',
-                        'text': content,
-                        'example': {
-                            'body_text': [example_text]
-                        }
-                    }
-                ]
+                'language': 'en_US',
+                'components': [body_component]
             }
             
             # Log the exact payload being sent
@@ -106,10 +144,10 @@ class MetaTemplateAPI:
             logger.error(error_msg)
             raise HTTPException(status_code=500, detail=error_msg)
 
-    async def check_template_status(self, page_id: str, template_id: str) -> Dict[str, Any]:
+    async def check_template_status(self, page_id: str, template_id: str, page_access_token: Optional[str] = None) -> Dict[str, Any]:
         """Check the status of a submitted template"""
         try:
-            access_token = await self._get_access_token(page_id)
+            access_token = await self._get_access_token(page_id, page_access_token)
             
             url = f"{self.base_url}/{template_id}"
             response = await self.client.get(

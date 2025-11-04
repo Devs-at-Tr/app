@@ -2,6 +2,7 @@ import React, { useCallback, useMemo, useState } from 'react';
 import { Button } from './ui/button';
 import { RefreshCw, Search, Instagram } from 'lucide-react';
 import { Input } from './ui/input';
+import { formatMessageTime, formatMessageDate } from '../utils/dateUtils';
 
 const FacebookIcon = ({ className }) => (
   <svg className={className} viewBox="0 0 24 24" fill="currentColor">
@@ -60,6 +61,12 @@ const ChatSidebar = ({
       )}
     </div>
   );
+
+  const getLastActivityLabel = (chat) => {
+    const timestamp = chat?.last_message_timestamp || chat?.updated_at || chat?.created_at;
+    if (!timestamp) return '';
+    return formatMessageTime(timestamp) || formatMessageDate(timestamp);
+  };
 
   return (
     <div className="bg-[#1a1a2e] border border-gray-800 rounded-xl h-full flex flex-col" data-testid="chat-sidebar">
@@ -120,7 +127,7 @@ const ChatSidebar = ({
               }`}
               data-testid={`chat-item-${chat.id}`}
             >
-              <div className="flex items-start justify-between">
+              <div className="flex items-start justify-between gap-2">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center space-x-2 mb-1">
                     {getPlatformBadge(chat.platform)}
@@ -136,6 +143,9 @@ const ChatSidebar = ({
                     <p className="text-xs text-purple-400 mt-1">Assigned: {chat.assigned_agent.name}</p>
                   )}
                 </div>
+                <span className="text-xs text-gray-500 whitespace-nowrap">
+                  {getLastActivityLabel(chat)}
+                </span>
               </div>
             </div>
           ))

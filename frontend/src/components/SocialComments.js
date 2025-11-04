@@ -488,24 +488,24 @@ const SocialComments = ({ selectedPlatform = 'all' }) => {
           </TabsList>
           <TabsContent value="instagram">
             <div className="grid grid-cols-12 gap-4 h-[calc(100vh-320px)]">
-              <div className="col-span-4">{renderList()}</div>
-              <div className="col-span-5">{renderThread()}</div>
-              <div className="col-span-3">{renderProfile()}</div>
+              <div className="col-span-4 h-full min-h-0">{renderList()}</div>
+              <div className="col-span-5 h-full min-h-0">{renderThread()}</div>
+              <div className="col-span-3 h-full min-h-0">{renderProfile()}</div>
             </div>
           </TabsContent>
           <TabsContent value="facebook">
             <div className="grid grid-cols-12 gap-4 h-[calc(100vh-320px)]">
-              <div className="col-span-4">{renderList()}</div>
-              <div className="col-span-5">{renderThread()}</div>
-              <div className="col-span-3">{renderProfile()}</div>
+              <div className="col-span-4 h-full min-h-0">{renderList()}</div>
+              <div className="col-span-5 h-full min-h-0">{renderThread()}</div>
+              <div className="col-span-3 h-full min-h-0">{renderProfile()}</div>
             </div>
           </TabsContent>
         </Tabs>
       ) : (
         <div className="grid grid-cols-12 gap-4 h-[calc(100vh-320px)]">
-          <div className="col-span-4">{renderList()}</div>
-          <div className="col-span-5">{renderThread()}</div>
-          <div className="col-span-3">{renderProfile()}</div>
+          <div className="col-span-4 h-full min-h-0">{renderList()}</div>
+          <div className="col-span-5 h-full min-h-0">{renderThread()}</div>
+          <div className="col-span-3 h-full min-h-0">{renderProfile()}</div>
         </div>
       )}
     </div>

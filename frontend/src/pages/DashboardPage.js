@@ -198,11 +198,26 @@ const DashboardContent = ({ user, onLogout }) => {
                 selectedPlatform={selectedPlatform}
                 onPlatformChange={handlePlatformChange}
               />
-              <TabsList className="bg-[#1a1a2e] border border-gray-800 px-1 py-1 gap-1 justify-start">
-                <TabsTrigger value="chats" className="px-4 py-1.5 text-sm">Direct Messages</TabsTrigger>
-                <TabsTrigger value="comments" className="px-4 py-1.5 text-sm">Comments</TabsTrigger>
+              <TabsList className="flex items-center gap-2 bg-transparent border-none p-0">
+                <TabsTrigger
+                  value="chats"
+                  className="px-4 py-1.5 text-sm rounded-l-lg border border-gray-800 bg-[#1a1a2e] data-[state=active]:bg-purple-600 data-[state=active]:text-white"
+                >
+                  Direct Messages
+                </TabsTrigger>
+                <TabsTrigger
+                  value="comments"
+                  className="px-4 py-1.5 text-sm rounded-r-lg border border-gray-800 border-l-0 bg-[#1a1a2e] data-[state=active]:bg-purple-600 data-[state=active]:text-white"
+                >
+                  Comments
+                </TabsTrigger>
                 {user.role === 'admin' && (
-                  <TabsTrigger value="templates" className="px-4 py-1.5 text-sm">Templates</TabsTrigger>
+                  <TabsTrigger
+                    value="templates"
+                    className="ml-3 px-4 py-1.5 text-sm rounded-lg border border-gray-800 bg-[#101023] text-gray-300 hover:text-white hover:bg-purple-500/20 data-[state=active]:bg-purple-600 data-[state=active]:text-white"
+                  >
+                    Templates
+                  </TabsTrigger>
                 )}
               </TabsList>
             </div>
@@ -295,7 +310,7 @@ const DashboardContent = ({ user, onLogout }) => {
           </TabsContent>
 
           <TabsContent value="comments">
-            <div className="h-[calc(100vh-380px)] overflow-y-auto">
+            <div className="h-[calc(100vh-380px)] overflow-hidden">
               <SocialComments selectedPlatform={selectedPlatform === 'all' ? 'all' : selectedPlatform} />
             </div>
           </TabsContent>

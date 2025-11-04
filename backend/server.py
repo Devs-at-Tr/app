@@ -1,7 +1,8 @@
 from fastapi import FastAPI, APIRouter, Depends, HTTPException, status, Header, Request, Query, WebSocket, WebSocketDisconnect
+from starlette.websockets import WebSocketState
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session, joinedload
-from typing import List, Optional, Set, Dict, Any
+from typing import List, Optional, Set, Dict, Any, Tuple
 from websocket_manager import manager as ws_manager
 import os
 import logging
@@ -11,7 +12,6 @@ from dotenv import load_dotenv
 import random
 import asyncio
 from datetime import datetime, timezone, timedelta
-
 from database import engine, get_db, Base
 from models import (
     User,
@@ -65,6 +65,23 @@ INSTAGRAM_PAGE_ACCESS_TOKEN = os.getenv("INSTAGRAM_PAGE_ACCESS_TOKEN") or os.get
 INSTAGRAM_VERIFY_TOKEN = os.getenv("VERIFY_TOKEN") or os.getenv("INSTAGRAM_WEBHOOK_VERIFY_TOKEN") or os.getenv("FACEBOOK_WEBHOOK_VERIFY_TOKEN")
 PIXEL_ID = os.getenv("PIXEL_ID")
 GRAPH_VERSION = os.getenv("GRAPH_VERSION", "v18.0")
+INSTAGRAM_APP_SECRET = os.getenv("INSTAGRAM_APP_SECRET") or os.getenv("FACEBOOK_APP_SECRET", "")
+INSTAGRAM_APP_SECRET_ALT = os.getenv("INSTAGRAM_APP_SECRET_ALT", "")
+DIAGNOSTIC_HMAC_LOGGING = os.getenv("INSTAGRAM_HMAC_DEBUG", "false").lower() in {"1", "true", "yes"}
+
+def _validate_instagram_secret():
+    local_logger = logging.getLogger(__name__)
+    secret = INSTAGRAM_APP_SECRET
+    if not secret or len(secret) < 10 or "${" in secret:
+        local_logger.critical("INSTAGRAM_APP_SECRET is missing or invalid. Shutdown to avoid webhook drift.")
+        raise RuntimeError("INSTAGRAM_APP_SECRET is missing or invalid")
+    suffix = secret[-6:]
+    alt_suffix = INSTAGRAM_APP_SECRET_ALT[-6:] if INSTAGRAM_APP_SECRET_ALT else None
+    local_logger.info("Instagram app secret suffix: ****%s", suffix)
+    if INSTAGRAM_APP_SECRET_ALT:
+        local_logger.info("Instagram alternate app secret suffix: ****%s", alt_suffix)
+
+_validate_instagram_secret()
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
@@ -158,6 +175,42 @@ def resolve_default_instagram_account(db: Session, current_user: Optional[User] 
     if current_user and current_user.role != UserRole.ADMIN:
         query = query.filter(InstagramAccount.user_id == current_user.id)
     return query.first()
+
+
+def resolve_meta_entity_for_template(
+    db: Session,
+    template: MessageTemplate,
+    current_user: User,
+) -> Tuple[str, str]:
+    """Determine the Meta entity (page or IG account) and token for a template submission."""
+    if template.platform == MessagePlatform.FACEBOOK:
+        page = (
+            db.query(FacebookPage)
+            .filter(FacebookPage.is_active == True)
+            .order_by(FacebookPage.connected_at.desc())
+            .first()
+        )
+        if not page:
+            raise HTTPException(status_code=400, detail="No active Facebook page found")
+        if not page.access_token:
+            raise HTTPException(status_code=400, detail="Facebook page access token not configured")
+        return page.page_id, page.access_token
+
+    if template.platform == MessagePlatform.INSTAGRAM:
+        account = resolve_default_instagram_account(db, current_user)
+        if not account:
+            account = (
+                db.query(InstagramAccount)
+                .order_by(InstagramAccount.connected_at.desc())
+                .first()
+            )
+        if not account:
+            raise HTTPException(status_code=400, detail="No connected Instagram account found")
+        if not account.access_token:
+            raise HTTPException(status_code=400, detail="Instagram account access token not configured")
+        return account.page_id, account.access_token
+
+    raise HTTPException(status_code=400, detail=f"Unsupported template platform: {template.platform}")
 
 def persist_instagram_insight(
     db: Session,
@@ -1124,6 +1177,12 @@ async def verify_instagram_webhook(
 ):
     """Verify Instagram webhook subscription"""
     
+    if instagram_client.verify_webhook_token(hub_mode, hub_verify_token):
+        return int(hub_challenge)
+    else:
+        raise HTTPException(status_code=403, detail="Verification failed")
+    """Verify Instagram webhook subscription"""
+    
     return _verify_instagram_webhook_subscription(hub_mode, hub_challenge, hub_verify_token)
 
 @app.get("/webhook")
@@ -1139,15 +1198,23 @@ async def _handle_instagram_webhook(request: Request, db: Session) -> Dict[str, 
     """Shared webhook handler for Instagram DM events."""
     try:
         body = await request.body()
-        signature_sha256 = request.headers.get("X-Hub-Signature-256")
-        signature_sha1 = request.headers.get("X-Hub-Signature")
+        signature_sha256 = request.headers.get("X-Hub-Signature-256") or request.headers.get("x-hub-signature-256")
+        signature_sha1 = request.headers.get("X-Hub-Signature") or request.headers.get("x-hub-signature")
 
         if instagram_client.mode != InstagramMode.MOCK and not instagram_client.verify_webhook_signature(
             body,
             signature_sha256,
             signature_sha1
         ):
-            logger.warning("Invalid Instagram webhook signature")
+            if DIAGNOSTIC_HMAC_LOGGING:
+                logger.error(
+                    "HMAC verification failed. headers sha256=%s sha1=%s len=%s secret_suffix=%s alt_suffix=%s",
+                    signature_sha256,
+                    signature_sha1,
+                    len(body),
+                    INSTAGRAM_APP_SECRET[-6:] if INSTAGRAM_APP_SECRET else "missing",
+                    INSTAGRAM_APP_SECRET_ALT[-6:] if INSTAGRAM_APP_SECRET_ALT else "none"
+                )
             raise HTTPException(status_code=401, detail="Invalid signature")
 
         data = await request.json()
@@ -1162,6 +1229,9 @@ async def _handle_instagram_webhook(request: Request, db: Session) -> Dict[str, 
         for entry in data.get("entry", []):
             instagram_account_id = entry.get("id")
             if not instagram_account_id:
+                continue
+            if str(instagram_account_id) == "0":
+                logger.debug("Skipping Meta test webhook entry with id=0")
                 continue
 
             page_access_token = resolve_instagram_access_token(db, instagram_account_id)
@@ -2027,35 +2097,51 @@ async def submit_template_to_meta(
     if template.meta_submission_status == "pending":
         raise HTTPException(status_code=400, detail="Template is already pending Meta approval")
 
-    # Get associated Facebook page
-    facebook_page = db.query(FacebookPage).filter(FacebookPage.is_active == True).first()
-    if not facebook_page:
-        raise HTTPException(status_code=400, detail="No active Facebook page found")
+    entity_id, entity_token = resolve_meta_entity_for_template(db, template, current_user)
 
     try:
-        # Log template and Facebook page info for debugging
-        logger.info(f"Attempting to submit template {template_id} using Facebook page {facebook_page.page_id}")
-        logger.info(f"Template details - Name: {template.name}, Category: {template.category}")
+        # Log template info for debugging
+        logger.info(
+            "Submitting template %s via Meta entity %s (platform=%s, category=%s)",
+            template_id,
+            entity_id,
+            template.platform,
+            template.category,
+        )
         
-        # Validate category format
-        valid_categories = ['CUSTOMER_SUPPORT', 'MARKETING', 'UTILITY']
-        category = template.category.upper()
-        if category not in valid_categories:
+        # Validate and normalize category for Meta API
+        category_map = {
+            'CUSTOMER_SUPPORT': 'UTILITY',
+            'SUPPORT': 'UTILITY',
+            'UTILITY': 'UTILITY',
+            'GREETING': 'UTILITY',
+            'CLOSING': 'UTILITY',
+            'MARKETING': 'MARKETING',
+            'PROMOTION': 'MARKETING',
+            'SALES': 'MARKETING',
+            'AUTHENTICATION': 'AUTHENTICATION',
+            'OTP': 'AUTHENTICATION',
+            'SECURITY': 'AUTHENTICATION',
+        }
+        category_key = (template.category or '').upper()
+        meta_category = category_map.get(category_key)
+        if not meta_category:
+            valid_labels = ['Utility', 'Marketing', 'Authentication']
             raise HTTPException(
                 status_code=400,
-                detail=f"Invalid template category. Must be one of: {', '.join(valid_categories)}"
+                detail=f"Unsupported template category '{template.category}'. Please select one of: {', '.join(valid_labels)}"
             )
         
         # Prepare template data
         template_data = {
             "name": template.name,
-            "category": category,
+            "category": meta_category,
             "content": template.content,
             "platform": template.platform
         }
         
         # Submit to Meta
-        result = await meta_template_api.submit_template(facebook_page.page_id, template_data)
+        result = await meta_template_api.submit_template(entity_id, template_data, entity_token)
         
         # Update template with submission info
         template.meta_submission_id = result['id']
@@ -2125,7 +2211,11 @@ async def check_meta_template_status(
 
     try:
         # Check template status with Meta
-        result = await meta_template_api.check_template_status(template.meta_submission_id)
+        entity_id, entity_token = resolve_meta_entity_for_template(db, template, current_user)
+
+        result = await meta_template_api.check_template_status(
+            entity_id, template.meta_submission_id, entity_token
+        )
         
         # Update template status in database
         old_status = template.meta_submission_status
@@ -2513,58 +2603,61 @@ def simulate_incoming_message(chat_id: str, message: str, current_user: User = D
 
 # WebSocket endpoint
 @app.websocket("/messenger/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    token = websocket.query_params.get('token')
-    if not token:
-        await websocket.close(code=1008)  # Policy violation
-        logger.error("WebSocket connection rejected: No token provided")
-        return
-
+async def websocket_endpoint(
+    websocket: WebSocket,
+    db: Session = Depends(get_db)
+):
+    user_id: Optional[str] = None
     try:
-        # Verify token before accepting connection
+        token = websocket.query_params.get("token")
+        if not token:
+            await websocket.close(code=4001, reason="Missing authentication token")
+            logger.error("WebSocket connection rejected: No token provided")
+            return
+
         payload = decode_access_token(token)
-        if not payload or 'user_id' not in payload:
-            await websocket.close(code=1008)
+        if not payload or "user_id" not in payload:
+            await websocket.close(code=4002, reason="Invalid authentication token")
             logger.error("WebSocket connection rejected: Invalid token")
             return
-        
-        # Extract user ID and set up connection
-        user_id = str(payload['user_id'])
+
+        user_id = str(payload["user_id"])
+        user = db.query(User).filter(User.id == payload["user_id"]).first()
+        if not user:
+            await websocket.close(code=4003, reason="User not found")
+            logger.error("WebSocket connection rejected: User not found")
+            user_id = None
+            return
+
         await ws_manager.connect(websocket, user_id)
         logger.info(f"WebSocket connected for user {user_id}")
-        
+
         while True:
             try:
-                # Keep connection alive and handle any incoming messages
                 data = await websocket.receive_json()
-                
-                # Handle ping messages to keep connection alive
-                if data.get('type') == 'ping':
-                    await websocket.send_json({'type': 'pong'})
+                if data.get("type") == "ping":
+                    await websocket.send_json({"type": "pong"})
                     continue
-                
-                # Handle any other incoming messages here if needed
                 logger.debug(f"Received WebSocket message from user {user_id}: {data}")
-                
             except WebSocketDisconnect:
                 logger.info(f"WebSocket disconnected for user {user_id}")
                 break
             except ValueError as json_error:
                 logger.warning(f"Invalid JSON received from user {user_id}: {json_error}")
-                continue
-            except Exception as e:
-                logger.error(f"Error handling WebSocket message from user {user_id}: {e}")
-                continue
-            
-    except Exception as e:
-        logger.error(f"WebSocket error: {e}")
+            except Exception as err:
+                logger.error(f"Error handling WebSocket message from user {user_id}: {err}")
+    except Exception as error:
+        logger.error(f"WebSocket authentication/processing error: {error}")
+        if websocket.application_state == WebSocketState.CONNECTING:
+            await websocket.close(code=4004, reason="Authentication failed")
     finally:
-        # Always clean up the connection
-        try:
-            ws_manager.disconnect(websocket, user_id)
-            logger.info(f"WebSocket connection cleaned up for user {user_id}")
-        except Exception as cleanup_error:
-            logger.error(f"Error during WebSocket cleanup: {cleanup_error}")
+        if user_id:
+            try:
+                ws_manager.disconnect(websocket, user_id)
+                logger.info(f"WebSocket connection cleaned up for user {user_id}")
+            except Exception as cleanup_error:
+                logger.error(f"Error during WebSocket cleanup: {cleanup_error}")
+
 
 # Include the router in the main app
 app.include_router(api_router)

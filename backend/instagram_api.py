@@ -22,9 +22,11 @@ class InstagramClient:
         graph_version = os.getenv("GRAPH_VERSION", "v18.0")
         self.BASE_URL = f"https://graph.facebook.com/{graph_version}"
         self.skip_signature_check = os.getenv("INSTAGRAM_SKIP_SIGNATURE", "false").lower() in {"1", "true", "yes"}
+        self.hmac_debug = os.getenv("INSTAGRAM_HMAC_DEBUG", "false").lower() in {"1", "true", "yes"}
         
         # Use Facebook app secret for both Facebook and Instagram since they're the same app
-        self.app_secret = os.getenv("FACEBOOK_APP_SECRET") or os.getenv("INSTAGRAM_APP_SECRET", "")
+        self.app_secret = os.getenv("INSTAGRAM_APP_SECRET") or os.getenv("FACEBOOK_APP_SECRET", "")
+        self.app_secret_alt = os.getenv("INSTAGRAM_APP_SECRET_ALT", "")
         if not self.app_secret:
             logger.warning("No app secret found in environment variables")
             
@@ -79,35 +81,43 @@ class InstagramClient:
             logger.error("No app secret configured. Check FACEBOOK_APP_SECRET in .env")
             return False
         
-        try:
-            app_secret = self.app_secret.encode('utf-8')
-            
-            header_sha256 = self._normalize_signature(signature_sha256, "sha256=") if signature_sha256 else None
-            header_sha1 = self._normalize_signature(signature_sha1, "sha1=") if signature_sha1 else None
-            
-            sha256_hmac = hmac.new(app_secret, payload, hashlib.sha256).hexdigest()
-            sha1_hmac = hmac.new(app_secret, payload, hashlib.sha1).hexdigest()
-            
-            sha256_ok = header_sha256 and hmac.compare_digest(header_sha256, sha256_hmac)
-            sha1_ok = header_sha1 and hmac.compare_digest(header_sha1, sha1_hmac)
-            
-            if sha256_ok or sha1_ok:
-                logger.debug("Signature verified")
-                return True
-            
-            # Log expected signatures for debugging
-            logger.warning(
-                "Signature verification failed. Expected SHA256: sha256=%s or SHA1: sha1=%s",
-                sha256_hmac,
-                sha1_hmac
+        secrets = [self.app_secret, self.app_secret_alt]
+        header_sha256 = self._normalize_signature(signature_sha256, "sha256=") if signature_sha256 else None
+        header_sha1 = self._normalize_signature(signature_sha1, "sha1=") if signature_sha1 else None
+        header_sha256 = header_sha256.lower() if header_sha256 else None
+        header_sha1 = header_sha1.lower() if header_sha1 else None
+
+        for secret in secrets:
+            if not secret:
+                continue
+            try:
+                secret_bytes = secret.encode("utf-8")
+                sha256_digest = hmac.new(secret_bytes, payload, hashlib.sha256).hexdigest()
+                sha1_digest = hmac.new(secret_bytes, payload, hashlib.sha1).hexdigest()
+                sha256_ok = header_sha256 and hmac.compare_digest(header_sha256, sha256_digest)
+                sha1_ok = header_sha1 and hmac.compare_digest(header_sha1, sha1_digest)
+                if sha256_ok or sha1_ok:
+                    logger.debug("Instagram webhook signature verified using configured secret")
+                    return True
+                if self.hmac_debug:
+                    logger.warning(
+                        "Signature mismatch for provided secret suffix ****%s (computed sha256=%s sha1=%s)",
+                        secret[-6:],
+                        sha256_digest,
+                        sha1_digest
+                    )
+            except Exception as exc:
+                logger.error("Error verifying Instagram webhook signature: %s", exc)
+
+        if self.hmac_debug:
+            logger.error(
+                "Signature verification failure. headers sha256=%s sha1=%s payload_len=%s first16=%s",
+                header_sha256,
+                header_sha1,
+                len(payload),
+                payload[:16].hex() if payload else ""
             )
-            logger.debug("Received signature headers: sha256=%s, sha1=%s", signature_sha256, signature_sha1)
-            logger.debug("Payload (first 100 bytes): %s", payload[:100])
-            return False
-        
-        except Exception as e:
-            logger.error(f"Error verifying Instagram webhook signature: {e}")
-            return False
+        return False
     
     def verify_webhook_token(self, hub_mode: str, hub_verify_token: str) -> bool:
         """Verify webhook setup token"""
