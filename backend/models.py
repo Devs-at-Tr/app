@@ -75,7 +75,7 @@ class Chat(Base):
     __tablename__ = "chats"
     
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    instagram_user_id = Column(String(255), nullable=False, index=True)
+    instagram_user_id = Column(String(255), ForeignKey("instagram_users.igsid"), nullable=False, index=True)
     username = Column(String(255), nullable=False)
     profile_pic_url = Column(Text, nullable=True)
     last_message = Column(Text, nullable=True)
@@ -88,6 +88,7 @@ class Chat(Base):
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
     
     messages = relationship("Message", back_populates="chat", cascade="all, delete-orphan", order_by="Message.timestamp")
+    instagram_user = relationship("InstagramUser", back_populates="chats")
     assigned_agent = relationship("User", back_populates="assigned_chats", foreign_keys=[assigned_to])
 
 class Message(Base):
@@ -142,19 +143,24 @@ class InstagramUser(Base):
     first_seen_at = Column(DateTime(timezone=True), default=utc_now)
     last_seen_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
     last_message = Column(Text, nullable=True)
+    username = Column(String(255), nullable=True)
+    name = Column(String(255), nullable=True)
 
     messages = relationship("InstagramMessage", back_populates="user", cascade="all, delete-orphan")
+    chats = relationship("Chat", back_populates="instagram_user")
 
 class InstagramMessage(Base):
     __tablename__ = "instagram_messages"
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     igsid = Column(String(255), ForeignKey("instagram_users.igsid"), nullable=False, index=True)
+    message_id = Column(String(255), nullable=True, unique=True, index=True)
     direction = Column(SQLEnum(InstagramMessageDirection), nullable=False)
     text = Column(Text, nullable=True)
     attachments_json = Column(Text, nullable=True)
     ts = Column(BigInteger, nullable=False, index=True)
     created_at = Column(DateTime(timezone=True), default=utc_now)
+    raw_payload_json = Column(Text, nullable=True)
 
     user = relationship("InstagramUser", back_populates="messages")
 

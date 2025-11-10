@@ -350,10 +350,12 @@ class InstagramClient:
         
         # Try to get sender's profile if available from the message
         sender_name = None
+        sender_username = None
         try:
             if "from" in message_data:
                 sender_profile = message_data.get("from", {})
-                sender_name = sender_profile.get("username") or sender_profile.get("name")
+                sender_username = sender_profile.get("username")
+                sender_name = sender_profile.get("name") or sender_username
         except Exception as e:
             logger.error(f"Error getting sender profile from message: {e}")
         
@@ -366,7 +368,9 @@ class InstagramClient:
             "has_attachments": len(attachments) > 0,
             "attachments": attachments,
             "is_story_reply": is_story_reply,
-            "timestamp": datetime.now(timezone.utc)
+            "timestamp": datetime.now(timezone.utc),
+            "sender_name": sender_name,
+            "sender_username": sender_username
         }
     
     async def get_user_profile(
@@ -395,7 +399,7 @@ class InstagramClient:
             business_response = await self.client.get(
                 f"{self.BASE_URL}/{user_id}",
                 params={
-                    "fields": "username,profile_picture_url,name,id",  # Instagram Graph API fields
+                    "fields": "username,profile_pic,name,id",  # Instagram Graph API fields
                     "access_token": page_access_token
                 }
             )
@@ -420,7 +424,7 @@ class InstagramClient:
                     "id": profile_data.get("id", user_id),
                     "username": display_name,  # Use the best available name
                     "name": profile_data.get("name") or display_name,
-                    "profile_pic": profile_data.get("profile_picture_url"),
+                    "profile_pic": profile_data.get("profile_pic"),
                     "mode": "real"
                 }
             else:

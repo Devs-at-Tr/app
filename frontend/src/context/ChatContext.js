@@ -168,25 +168,7 @@ export const ChatProvider = ({ children, userRole }) => {
       }
       
       setSelectedChat(chatData);
-
-      try {
-        // Mark messages as read - don't fail if this fails
-        await axios.post(`${API}/chats/${chatId}/mark_read`, {}, { headers });
-        
-        // Update unread count in chat list
-        setChats(currentChats =>
-          currentChats.map(chat =>
-            chat.id === chatId
-              ? { ...chat, unread_count: 0 }
-              : chat
-          )
-        );
-      } catch (markReadError) {
-        console.warn('Failed to mark messages as read:', markReadError);
-        // Continue anyway since we at least got the chat data
-      }
-
-      return response.data;
+      return chatData;
     } catch (error) {
       console.error('Error selecting chat:', error);
       setError(error.response?.data?.detail || error.message || 'Failed to load chat');
@@ -208,6 +190,12 @@ export const ChatProvider = ({ children, userRole }) => {
 
       const newMessage = response.data;
       updateChatMessages(chatId, newMessage);
+      
+      try {
+        await axios.post(`${API}/chats/${chatId}/mark_read`, {}, { headers });
+      } catch (markReadError) {
+        console.warn('Failed to mark messages as read after sending:', markReadError);
+      }
       
       return newMessage;
     } catch (error) {

@@ -40,7 +40,7 @@ const useWebSocket = (token) => {
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         wsUrl = `${protocol}//${window.location.host}`;
       }
-      const newWs = new WebSocket(`${wsUrl}/messenger/ws?token=${token}`);
+      const newWs = new WebSocket(`${wsUrl}/ws?token=${token}`);
       wsRef.current = newWs;
 
       newWs.onopen = () => {

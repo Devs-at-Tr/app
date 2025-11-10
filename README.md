@@ -2,6 +2,11 @@
 
 A full-stack messaging management platform designed for teams to efficiently handle customer support and engagement through **Instagram DMs** and **Facebook Messenger**.
 
+## 📚 Documentation Map
+
+- **Project Guide** – consolidated quick-start, integration, and engineering notes now live in [`docs/PROJECT_GUIDE.md`](docs/PROJECT_GUIDE.md). Refer to it for setup checklists, Meta permission collateral, bug-fix history, and AI prompt briefs.
+- **README (this file)** – high-level product overview, feature list, and API surface.
+
 ## 🚀 Features
 
 ### Core Functionality

@@ -576,24 +576,23 @@ class FacebookMessengerClient:
         url = f"{self.BASE_URL}/{user_id}"
         
         params = {
-            "fields": "id,first_name,last_name,profile_pic",
+            "fields": "id,name,username,profile_pic,is_verified_user,follower_count,is_user_follow_business,is_business_follow_user",
             "access_token": page_access_token
         }
         try:
             response = await self.client.get(url, params=params)
             if response.status_code == 200:
                 profile_data = response.json()
-                first_name = profile_data.get("first_name", "")
-                last_name = profile_data.get("last_name", "")
-                full_name = f"{first_name} {last_name}".strip()
+                
+                full_name = f"{profile.data.get('name', '')}".strip()
                 if not full_name:
                     full_name = profile_data.get("name") or f"Facebook User {user_id[:8]}"
                 profile = {
                     "success": True,
                     "id": profile_data.get("id", user_id),
                     "name": full_name,
-                    "first_name": first_name or None,
-                    "last_name": last_name or None,
+                    "first_name": full_name.split(" ")[0] if full_name else None,
+                    "last_name": full_name.split(" ")[1] if full_name else None,
                     "profile_pic": profile_data.get("profile_pic"),
                     "raw": profile_data,
                     "mode": "real"

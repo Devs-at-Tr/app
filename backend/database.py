@@ -39,7 +39,7 @@ database_url = get_database_url()
 
 if database_url and (database_url.startswith('mysql') or database_url.startswith('postgresql')):
     try:
-        engine = create_engine(database_url, echo=True)
+        engine = create_engine(database_url, echo=False)
         # Test connection
         engine.connect()
         db_name = 'MySQL' if DB_TYPE == 'mysql' else 'PostgreSQL'

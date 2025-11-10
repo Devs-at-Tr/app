@@ -20,6 +20,18 @@ import './ChatWindow.css';
 
 const HUMAN_AGENT_WINDOW_MS = 24 * 60 * 60 * 1000;
 
+const getChatHandle = (chat) =>
+  chat?.instagram_user?.username ||
+  chat?.username ||
+  chat?.instagram_user_id ||
+  '';
+
+const getChatDisplayName = (chat) =>
+  chat?.instagram_user?.name ||
+  chat?.instagram_user?.username ||
+  chat?.username ||
+  'Unknown';
+
 const FacebookIcon = ({ className }) => (
   <svg className={className} viewBox="0 0 24 24" fill="currentColor">
     <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
@@ -39,6 +51,21 @@ const ChatWindow = ({ agents, userRole, onAssignChat }) => {
   const [templateVariables, setTemplateVariables] = useState({});
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const messagesEndRef = useRef(null);
+  const chatHandle = useMemo(() => getChatHandle(chat), [chat]);
+  const chatDisplayName = useMemo(() => getChatDisplayName(chat), [chat]);
+  const chatAvatarUrl = useMemo(() => {
+    if (!chat) {
+      return null;
+    }
+    if (chat.profile_pic_url) {
+      return chat.profile_pic_url;
+    }
+    if (chatHandle) {
+      const encoded = encodeURIComponent(chatHandle);
+      return `https://ui-avatars.com/api/?name=${encoded}&background=241f3a&color=ffffff`;
+    }
+    return null;
+  }, [chat, chatHandle]);
 
   useEffect(() => {
     scrollToBottom();
@@ -119,8 +146,9 @@ const ChatWindow = ({ agents, userRole, onAssignChat }) => {
   const previewTemplateContent = (template) => {
     if (!template) return '';
     let content = template.content;
+    const chatHandle = getChatHandle(chat);
     // Auto-populate
-    content = content.replace('{username}', chat.username);
+    content = content.replace('{username}', chatHandle);
     content = content.replace('{platform}', chat.platform);
     // User-provided variables
     Object.keys(templateVariables).forEach(key => {
@@ -245,7 +273,6 @@ const ChatWindow = ({ agents, userRole, onAssignChat }) => {
       </div>
     );
   }
-
   return (
     <div
       className={`bg-[#1a1a2e] border border-gray-800 h-full w-full min-h-0 flex ${isMobile ? 'flex-col' : 'rounded-xl'}`}
@@ -255,19 +282,27 @@ const ChatWindow = ({ agents, userRole, onAssignChat }) => {
         {/* Chat Header */}
         <div className="p-4 border-b border-gray-800 flex items-center justify-between">
           <div className="flex items-center space-x-3">
-            <div
-              className={`w-10 h-10 rounded-full flex items-center justify-center ${
-                chat.platform === 'FACEBOOK'
-                  ? 'bg-gradient-to-br from-blue-600 to-blue-700'
-                  : 'bg-gradient-to-br from-purple-600 to-pink-600'
-              }`}
-            >
-              {chat.platform === 'FACEBOOK' ? (
-                <FacebookIcon className="w-5 h-5 text-white" />
-              ) : (
-                <Instagram className="w-5 h-5 text-white" />
-              )}
-            </div>
+            {chatAvatarUrl ? (
+              <img
+                src={chatAvatarUrl}
+                alt={chatDisplayName}
+                className="w-10 h-10 rounded-full object-cover border border-gray-700"
+              />
+            ) : (
+              <div
+                className={`w-10 h-10 rounded-full flex items-center justify-center ${
+                  chat.platform === 'FACEBOOK'
+                    ? 'bg-gradient-to-br from-blue-600 to-blue-700'
+                    : 'bg-gradient-to-br from-purple-600 to-pink-600'
+                }`}
+              >
+                {chat.platform === 'FACEBOOK' ? (
+                  <FacebookIcon className="w-5 h-5 text-white" />
+                ) : (
+                  <Instagram className="w-5 h-5 text-white" />
+                )}
+              </div>
+            )}
             <div>
               <div className="flex items-center space-x-2">
                 <button
@@ -277,7 +312,7 @@ const ChatWindow = ({ agents, userRole, onAssignChat }) => {
                   data-testid="chat-username"
                   title="View profile info"
                 >
-                  @{chat.username}
+                  {chatDisplayName}
                 </button>
                 <span
                   className={`px-2 py-0.5 text-xs rounded-full ${
@@ -290,7 +325,7 @@ const ChatWindow = ({ agents, userRole, onAssignChat }) => {
                 </span>
               </div>
               <p className="text-xs text-gray-400" data-testid="chat-instagram-id">
-                {chat.instagram_user_id}
+                @{chatHandle || 'unknown'}
               </p>
             </div>
           </div>
@@ -408,7 +443,7 @@ const ChatWindow = ({ agents, userRole, onAssignChat }) => {
                 Select Template
               </DialogTitle>
               <DialogDescription className="text-gray-400">
-                Choose a template to send to @{chat?.username}
+                Choose a template to send to @{chatHandle || 'unknown'}
               </DialogDescription>
             </DialogHeader>
 
@@ -538,17 +573,35 @@ const ChatWindow = ({ agents, userRole, onAssignChat }) => {
           onClose={handleCloseProfile}
           isMobile={isMobile}
           canSendManualMessage={canSendManualMessage}
+          chatDisplayName={chatDisplayName}
+          chatHandle={chatHandle}
+          chatAvatarUrl={chatAvatarUrl}
         />
       )}
     </div>
   );
 };
 
-const ChatProfilePanel = ({ chat, onClose, isMobile, canSendManualMessage }) => {
+const ChatProfilePanel = ({
+  chat,
+  onClose,
+  isMobile,
+  canSendManualMessage,
+  chatDisplayName,
+  chatHandle,
+  chatAvatarUrl,
+}) => {
   const assignedAgent = chat.assigned_agent;
   const messageCount = chat.messages?.length ?? 0;
   const lastMessage =
     chat.messages && chat.messages.length > 0 ? chat.messages[chat.messages.length - 1] : null;
+
+  const displayName = chatDisplayName || getChatDisplayName(chat);
+  const handle = chatHandle || getChatHandle(chat);
+  const avatarUrl =
+    chatAvatarUrl ||
+    chat.profile_pic_url ||
+    (handle ? `https://ui-avatars.com/api/?name=${encodeURIComponent(handle)}` : null);
 
   const statusLabel = chat.status
     ? chat.status
@@ -563,7 +616,7 @@ const ChatProfilePanel = ({ chat, onClose, isMobile, canSendManualMessage }) => 
       : 'bg-amber-500/10 text-amber-300 border-amber-500/40';
 
   const platformLabel = chat.platform === 'FACEBOOK' ? 'Facebook' : 'Instagram';
-  const initials = chat.username?.charAt(0)?.toUpperCase() || '?';
+  const initials = displayName?.charAt(0)?.toUpperCase() || '?';
 
   const infoItems = [
     {
@@ -616,12 +669,21 @@ const ChatProfilePanel = ({ chat, onClose, isMobile, canSendManualMessage }) => 
     >
       <div className="p-4 border-b border-gray-800 flex items-start justify-between">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-full bg-gradient-to-br from-purple-600 to-pink-600 flex items-center justify-center font-semibold text-white">
-            {initials}
-          </div>
+          {avatarUrl ? (
+            <img
+              src={avatarUrl}
+              alt={displayName}
+              className="w-10 h-10 rounded-full object-cover border border-gray-700"
+            />
+          ) : (
+            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-purple-600 to-pink-600 flex items-center justify-center font-semibold text-white">
+              {initials}
+            </div>
+          )}
           <div>
             <p className="text-xs uppercase text-gray-500 tracking-wide">Profile</p>
-            <p className="text-lg font-semibold text-white">@{chat.username}</p>
+            <p className="text-lg font-semibold text-white">{displayName}</p>
+            <p className="text-xs text-gray-400">@{handle || 'unknown'}</p>
             <div className="flex flex-wrap gap-2 mt-2">
               <Badge className={statusBadgeClass}>{statusLabel}</Badge>
               <Badge variant="outline" className="border-gray-700 text-gray-300">

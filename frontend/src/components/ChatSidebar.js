@@ -4,6 +4,18 @@ import { RefreshCw, Search, Instagram } from 'lucide-react';
 import { Input } from './ui/input';
 import { formatMessageTime, formatMessageDate } from '../utils/dateUtils';
 
+const getChatHandle = (chat) =>
+  chat?.instagram_user?.username ||
+  chat?.username ||
+  chat?.instagram_user_id ||
+  '';
+
+const getChatDisplayName = (chat) =>
+  chat?.instagram_user?.name ||
+  chat?.instagram_user?.username ||
+  chat?.username ||
+  'Unknown';
+
 const FacebookIcon = ({ className }) => (
   <svg className={className} viewBox="0 0 24 24" fill="currentColor">
     <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
@@ -40,10 +52,15 @@ const ChatSidebar = ({
     }
 
     const query = searchQuery.toLowerCase();
-    return platformFiltered.filter(chat =>
-      chat.username.toLowerCase().includes(query) ||
-      (chat.last_message || '').toLowerCase().includes(query)
-    );
+    return platformFiltered.filter(chat => {
+      const displayName = getChatDisplayName(chat).toLowerCase();
+      const handle = getChatHandle(chat).toLowerCase();
+      return (
+        displayName.includes(query) ||
+        handle.includes(query) ||
+        (chat.last_message || '').toLowerCase().includes(query)
+      );
+    });
   }, [chats, selectedPlatform, searchQuery]);
 
   const handleSelect = (chatId) => {
@@ -116,10 +133,12 @@ const ChatSidebar = ({
             No chats found
           </div>
         ) : (
-          filteredChats.map((chat) => (
-            <div
-              key={chat.id}
-              onClick={() => handleSelect(chat.id)}
+          filteredChats.map((chat) => {
+            const displayName = getChatDisplayName(chat);
+            return (
+              <div
+                key={chat.id}
+                onClick={() => handleSelect(chat.id)}
               className={`chat-item p-4 border-b border-gray-800 ${
                 isSelected(chat.id) ? 'active' : ''
               } ${
@@ -131,7 +150,7 @@ const ChatSidebar = ({
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center space-x-2 mb-1">
                     {getPlatformBadge(chat.platform)}
-                    <h3 className="text-white font-semibold truncate">{chat.username}</h3>
+                    <h3 className="text-white font-semibold truncate">{displayName}</h3>
                     {chat.unread_count > 0 && (
                       <span className="px-2 py-0.5 bg-purple-500 text-white text-xs font-semibold rounded-full">
                         {chat.unread_count}
@@ -147,8 +166,9 @@ const ChatSidebar = ({
                   {getLastActivityLabel(chat)}
                 </span>
               </div>
-            </div>
-          ))
+              </div>
+            );
+          })
         )}
       </div>
     </div>

@@ -90,6 +90,8 @@ class InstagramUserSchema(BaseModel):
     first_seen_at: datetime
     last_seen_at: datetime
     last_message: Optional[str] = None
+    username: Optional[str] = None
+    name: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -101,12 +103,14 @@ class InstagramUserSchema(BaseModel):
 class InstagramMessageSchema(BaseModel):
     id: str
     igsid: str
+    message_id: Optional[str] = None
     direction: InstagramMessageDirection
     text: Optional[str] = None
     attachments_json: Optional[str] = None
     ts: int
     created_at: datetime
     attachments: List[Dict[str, Any]] = []
+    raw_payload_json: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -244,6 +248,7 @@ class ChatResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     assigned_agent: Optional[UserResponse] = None
+    instagram_user: Optional[InstagramUserSchema] = None
     
     class Config:
         from_attributes = True
