@@ -1,9 +1,10 @@
 from fastapi import FastAPI, APIRouter, Depends, HTTPException, status, Header, Request, Query, WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.exc import IntegrityError
-from typing import List, Optional, Set, Dict, Any, Tuple
+from typing import List, Optional, Set, Dict, Any, Tuple, Type, Union
 from websocket_manager import manager as ws_manager
 import os
 import logging
@@ -13,21 +14,28 @@ from dotenv import load_dotenv
 import random
 import asyncio
 from datetime import datetime, timezone, timedelta
+from urllib.parse import urlparse
+import re
+import requests
+import hashlib
 from database import engine, get_db, Base
+from migrations.runner import run_all_migrations as ensure_instagram_profile_schema
 from models import (
     User,
     InstagramAccount,
     Chat,
-    Message,
     UserRole,
     ChatStatus,
     MessageSender,
     MessageType,
     FacebookPage,
+    FacebookUser,
     MessagePlatform,
     MessageTemplate,
     InstagramUser,
-    InstagramMessage,
+    FacebookMessage,
+    InstagramMessage as InstagramChatMessage,
+    InstagramMessageLog,
     InstagramMessageDirection,
     InstagramComment,
     InstagramCommentAction,
@@ -61,9 +69,53 @@ from instagram_api import instagram_client, InstagramMode
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
+ATTACHMENTS_ROOT = ROOT_DIR / "attachments"
+INSTAGRAM_ATTACHMENTS_DIR = ATTACHMENTS_ROOT / "instagram"
+ATTACHMENTS_ROOT.mkdir(parents=True, exist_ok=True)
+INSTAGRAM_ATTACHMENTS_DIR.mkdir(parents=True, exist_ok=True)
+ATTACHMENT_DOWNLOAD_TIMEOUT = int(os.getenv("ATTACHMENT_DOWNLOAD_TIMEOUT", "20"))
+INSTAGRAM_MESSAGE_ID_MAX_LENGTH = 512
+
 INSTAGRAM_PAGE_ID = os.getenv("INSTAGRAM_PAGE_ID") or os.getenv("PAGE_ID") or os.getenv("FACEBOOK_PAGE_ID")
 INSTAGRAM_PAGE_ACCESS_TOKEN = os.getenv("INSTAGRAM_PAGE_ACCESS_TOKEN") or os.getenv("PAGE_ACCESS_TOKEN") or os.getenv("FACEBOOK_PAGE_ACCESS_TOKEN")
 INSTAGRAM_VERIFY_TOKEN = os.getenv("VERIFY_TOKEN") or os.getenv("INSTAGRAM_WEBHOOK_VERIFY_TOKEN") or os.getenv("FACEBOOK_WEBHOOK_VERIFY_TOKEN")
+
+ChatMessageModel = Union[InstagramChatMessage, FacebookMessage]
+
+
+def _message_model_for_platform(platform: MessagePlatform) -> Type[ChatMessageModel]:
+    return InstagramChatMessage if platform == MessagePlatform.INSTAGRAM else FacebookMessage
+
+
+def create_chat_message_record(chat: Chat, **kwargs) -> ChatMessageModel:
+    """Instantiate the platform-specific chat message model."""
+    model = _message_model_for_platform(chat.platform)
+    payload: Dict[str, Any] = {
+        "chat_id": chat.id,
+        "platform": chat.platform,
+        **kwargs,
+    }
+    if chat.platform == MessagePlatform.INSTAGRAM:
+        if not chat.instagram_user_id:
+            raise ValueError("Instagram chats require instagram_user_id before creating messages")
+        payload.setdefault("instagram_user_id", chat.instagram_user_id)
+    else:
+        if not chat.facebook_user_id:
+            raise ValueError("Facebook chats require facebook_user_id before creating messages")
+        payload.setdefault("facebook_user_id", chat.facebook_user_id)
+    return model(**payload)
+
+
+def message_query_for_chat(db: Session, chat: Chat):
+    """Return a SQLAlchemy query for the chat's platform-specific message table."""
+    return db.query(_message_model_for_platform(chat.platform))
+
+
+def _requires_sqlite_instagram_fallback(db: Session) -> bool:
+    bind = getattr(db, "bind", None)
+    if bind is None:
+        return True
+    return bind.dialect.name.lower() == "sqlite"
 PIXEL_ID = os.getenv("PIXEL_ID")
 GRAPH_VERSION = os.getenv("GRAPH_VERSION", "v18.0")
 INSTAGRAM_APP_SECRET = os.getenv("INSTAGRAM_APP_SECRET") or os.getenv("FACEBOOK_APP_SECRET", "")
@@ -84,6 +136,12 @@ def _validate_instagram_secret():
 
 _validate_instagram_secret()
 
+# Ensure schema migrations are up to date before creating tables
+try:
+    ensure_instagram_profile_schema(engine)
+except Exception as migration_exc:
+    logging.getLogger(__name__).warning("Instagram profile migration skipped: %s", migration_exc)
+
 # Create database tables
 Base.metadata.create_all(bind=engine)
 
@@ -92,6 +150,12 @@ app = FastAPI(
     title="TickleGram API",
     # Enable CORS with credentials for WebSocket
     root_path=os.getenv('API_ROOT_PATH', ''),
+)
+
+app.mount(
+    "/attachments",
+    StaticFiles(directory=ATTACHMENTS_ROOT),
+    name="attachments"
 )
 
 
@@ -104,6 +168,85 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+def _sanitize_path_component(value: Optional[str], fallback: str = "item") -> str:
+    if not value:
+        return fallback
+    sanitized = re.sub(r'[^A-Za-z0-9._-]', '_', value)
+    return sanitized or fallback
+
+
+def _dump_attachments_json(attachments: Optional[List[Dict[str, Any]]]) -> Optional[str]:
+    if not attachments:
+        return None
+    try:
+        return json.dumps(attachments)
+    except (TypeError, ValueError):
+        return None
+
+
+def _download_instagram_attachment(
+    url: str,
+    igsid: str,
+    message_identifier: str,
+    index: int
+) -> Optional[str]:
+    """Download an Instagram attachment locally and return its relative path."""
+    try:
+        response = requests.get(url, timeout=ATTACHMENT_DOWNLOAD_TIMEOUT)
+        response.raise_for_status()
+    except Exception as exc:
+        logger.warning("Failed to download attachment %s: %s", url, exc)
+        return None
+
+    parsed = urlparse(url)
+    suffix = Path(parsed.path).suffix or ".bin"
+    sender_component = _sanitize_path_component(igsid, "ig_user")
+    message_component = _sanitize_path_component(message_identifier, "message")
+    target_dir = INSTAGRAM_ATTACHMENTS_DIR / sender_component / message_component
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    filename = f"{message_component}_{index}{suffix}"
+    file_path = target_dir / filename
+    try:
+        file_path.write_bytes(response.content)
+    except Exception as exc:
+        logger.warning("Unable to persist attachment %s: %s", file_path, exc)
+        return None
+
+    relative_path = file_path.relative_to(ATTACHMENTS_ROOT)
+    return str(relative_path).replace(os.sep, "/")
+
+
+def prepare_instagram_attachments(
+    igsid: str,
+    message_identifier: str,
+    attachments: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """Augment Instagram attachment payloads with local storage metadata."""
+    prepared: List[Dict[str, Any]] = []
+    for idx, attachment in enumerate(attachments):
+        if not isinstance(attachment, dict):
+            continue
+        payload = attachment.get("payload") or {}
+        source_url = payload.get("url") or attachment.get("url")
+        entry = dict(attachment)
+        entry["payload"] = payload
+        if attachment.get("type") == "image" and source_url:
+            local_rel_path = _download_instagram_attachment(
+                source_url,
+                igsid=igsid,
+                message_identifier=message_identifier,
+                index=idx
+            )
+            if local_rel_path:
+                entry["local_path"] = local_rel_path
+                entry["public_url"] = f"/attachments/{local_rel_path}"
+        if source_url and not entry.get("public_url"):
+            entry["public_url"] = source_url
+        prepared.append(entry)
+    return prepared
 
 def resolve_instagram_access_token(db: Session, page_id: Optional[str]) -> Optional[str]:
     """Resolve the best access token for an Instagram page."""
@@ -125,6 +268,237 @@ def gather_dm_notify_users(db: Session, chat: Optional[Chat] = None) -> Set[str]
     admin_users = db.query(User).filter(User.role == UserRole.ADMIN).all()
     notify_users.update(str(user.id) for user in admin_users)
     return notify_users
+
+
+def normalize_message_sender(message: ChatMessageModel) -> None:
+    """Ensure message sender has a valid enum value."""
+    if not message:
+        return
+    sender_value = message.sender.value if isinstance(message.sender, MessageSender) else message.sender
+    if not sender_value or not str(sender_value).strip():
+        message.sender = MessageSender.INSTAGRAM_PAGE
+
+
+def _extract_attachment_summary(attachments: List[Any]) -> Optional[str]:
+    """Return a human-friendly summary for Instagram attachment payloads."""
+    if not attachments:
+        return None
+    try:
+        for attachment in attachments:
+            if not isinstance(attachment, dict):
+                continue
+            attachment_type = attachment.get("type")
+            payload = attachment.get("payload") or {}
+
+            if attachment_type == "template":
+                generic = payload.get("generic") or {}
+                elements = generic.get("elements") or payload.get("elements") or []
+                titles = [element.get("title") for element in elements if isinstance(element, dict) and element.get("title")]
+                if titles:
+                    return "\n".join(filter(None, titles))
+            title = attachment.get("title") or payload.get("title")
+            if title:
+                return title
+        return "[attachment]"
+    except Exception:
+        return "[attachment]"
+
+
+def resolve_message_text(raw_text: Optional[str], attachments: List[Any]) -> Optional[str]:
+    """Resolve best-effort text for a message, falling back to attachment summary."""
+    if raw_text:
+        stripped = raw_text.strip()
+        if stripped:
+            return stripped
+    summary = _extract_attachment_summary(attachments)
+    return summary
+
+
+def hydrate_instagram_chat_messages(chat: Optional[Chat], instagram_msgs: List[InstagramMessageLog]) -> None:
+    """Fill in message content for Instagram chats using stored attachment payloads."""
+    if not chat or chat.platform != MessagePlatform.INSTAGRAM:
+        return
+    if not chat.messages:
+        chat.messages = []
+    if not instagram_msgs:
+        return
+
+    grouped: Dict[int, List[InstagramMessageLog]] = {}
+    for ig_msg in instagram_msgs:
+        grouped.setdefault(int(ig_msg.ts), []).append(ig_msg)
+
+    def _normalize_sender(value: Any) -> MessageSender:
+        if isinstance(value, MessageSender):
+            return value
+        try:
+            return MessageSender(value)
+        except ValueError:
+            if hasattr(value, "value"):
+                try:
+                    return MessageSender(value.value)
+                except ValueError:
+                    pass
+            return MessageSender.AGENT if str(value).lower().startswith("agent") else MessageSender.INSTAGRAM_USER
+
+    def _bucket(sender_value: Any) -> MessageSender:
+        sender_enum = _normalize_sender(sender_value)
+        return MessageSender.INSTAGRAM_PAGE if sender_enum in {MessageSender.AGENT, MessageSender.INSTAGRAM_PAGE} else MessageSender.INSTAGRAM_USER
+
+    def _find_candidates(ts_value: Optional[int]) -> List[InstagramMessageLog]:
+        if ts_value is None:
+            return []
+        for delta in (0, -1, 1):
+            candidates = grouped.get(ts_value + delta)
+            if candidates:
+                return candidates
+        return []
+
+    existing_keys: Set[Tuple[int, MessageSender]] = set()
+
+    for message in chat.messages:
+        if message.platform != MessagePlatform.INSTAGRAM:
+            continue
+        if not hasattr(message, "attachments"):
+            message.attachments = []
+        content = (message.content or "").strip()
+        if content and content.lower() != "[attachment]":
+            continue
+        ts_value = None
+        if message.timestamp:
+            ts_value = int(message.timestamp.timestamp())
+        candidates = _find_candidates(ts_value)
+        if not candidates:
+            if ts_value is not None:
+                existing_keys.add((ts_value, _bucket(message.sender)))
+            continue
+
+        desired_direction = InstagramMessageDirection.OUTBOUND if message.sender in {
+            MessageSender.AGENT,
+            MessageSender.INSTAGRAM_PAGE
+        } else InstagramMessageDirection.INBOUND
+
+        selected = next((rec for rec in candidates if rec.direction == desired_direction), candidates[0])
+        selected_ts = int(selected.ts)
+        sender_bucket = MessageSender.INSTAGRAM_PAGE if desired_direction == InstagramMessageDirection.OUTBOUND else MessageSender.INSTAGRAM_USER
+        existing_keys.add((selected_ts, sender_bucket))
+        if not message.timestamp:
+            message.timestamp = datetime.fromtimestamp(selected_ts, tz=timezone.utc)
+        if message.timestamp:
+            existing_keys.add((int(message.timestamp.timestamp()), _bucket(message.sender)))
+
+        attachments: List[Any] = []
+        if selected.attachments_json:
+            try:
+                attachments = json.loads(selected.attachments_json)
+            except Exception:
+                attachments = []
+        else:
+            attachments = []
+
+        hydrated_text = resolve_message_text(selected.text, attachments)
+        if hydrated_text:
+            message.content = hydrated_text
+        message.attachments = attachments
+        if attachments:
+            message.attachments_json = _dump_attachments_json(attachments)
+
+    def _bucket(sender_enum: MessageSender) -> MessageSender:
+        return MessageSender.INSTAGRAM_PAGE if sender_enum in {MessageSender.AGENT, MessageSender.INSTAGRAM_PAGE} else MessageSender.INSTAGRAM_USER
+
+    synthetic_messages: List[InstagramChatMessage] = []
+    for row in instagram_msgs:
+        if row.direction == InstagramMessageDirection.OUTBOUND:
+            continue
+        row_sender = MessageSender.INSTAGRAM_PAGE if row.direction == InstagramMessageDirection.OUTBOUND else MessageSender.INSTAGRAM_USER
+        bucket = _bucket(row_sender)
+        if (int(row.ts), bucket) in existing_keys:
+            continue
+
+        attachments: List[Any] = []
+        if row.attachments_json:
+            try:
+                attachments = json.loads(row.attachments_json)
+            except Exception:
+                attachments = []
+        resolved = resolve_message_text(row.text, attachments) or "[attachment]"
+        synthetic = create_chat_message_record(
+            chat,
+            id=f"ig-history-{row.id}",
+            sender=row_sender,
+            content=resolved,
+            message_type=MessageType.TEXT,
+            timestamp=datetime.fromtimestamp(row.ts, tz=timezone.utc),
+            is_ticklegram=bool(getattr(row, "is_ticklegram", False)),
+            attachments_json=_dump_attachments_json(attachments)
+        )
+        synthetic.attachments = attachments
+        synthetic_messages.append(synthetic)
+
+    if synthetic_messages:
+        chat.messages.extend(synthetic_messages)
+
+    def _ts(msg: InstagramChatMessage) -> datetime:
+        if msg.timestamp:
+            return msg.timestamp if msg.timestamp.tzinfo else msg.timestamp.replace(tzinfo=timezone.utc)
+        return datetime.now(timezone.utc)
+
+    chat.messages.sort(key=_ts)
+
+    def _is_synthetic(message: InstagramChatMessage) -> bool:
+        msg_id = getattr(message, "id", "") or ""
+        return isinstance(msg_id, str) and msg_id.startswith("ig-history-")
+
+    def _dedupe_key(message: InstagramChatMessage) -> str:
+        sender_bucket = _bucket(message.sender)
+        content_val = (message.content or "").strip()
+        ts_val = _ts(message).isoformat()
+        return f"{ts_val}|{sender_bucket.value}|{content_val}"
+
+    unique_messages: List[InstagramChatMessage] = []
+    seen_real_keys: Set[str] = set()
+    seen_synthetic_keys: Set[str] = set()
+
+    for message in chat.messages:
+        dedupe_key = _dedupe_key(message)
+        if not _is_synthetic(message):
+            seen_real_keys.add(dedupe_key)
+            unique_messages.append(message)
+            continue
+
+        if dedupe_key in seen_real_keys or dedupe_key in seen_synthetic_keys:
+            continue
+
+        seen_synthetic_keys.add(dedupe_key)
+        unique_messages.append(message)
+
+    prioritized_messages: List[InstagramChatMessage] = []
+    ticklegram_keys: Set[str] = set()
+    generic_keys: Set[str] = set()
+
+    def _origin_key(msg: InstagramChatMessage) -> str:
+        return f"{_ts(msg).isoformat()}|{(msg.content or '').strip().lower()}"
+
+    for message in unique_messages:
+        key = _origin_key(message)
+        if getattr(message, "is_ticklegram", False):
+            ticklegram_keys.add(key)
+            prioritized_messages.append(message)
+            continue
+        if key in ticklegram_keys or key in generic_keys:
+            continue
+        generic_keys.add(key)
+        prioritized_messages.append(message)
+
+    chat.messages = prioritized_messages
+    for message in chat.messages:
+        has_explicit = hasattr(message, "attachments") and message.attachments
+        if not has_explicit:
+            raw_json = getattr(message, "attachments_json", None)
+            if raw_json:
+                try:
+                    message.attachments = json.loads(raw_json)
+                except Exception:
+                    message.attachments = []
 
 
 def ensure_instagram_user(
@@ -1291,10 +1665,21 @@ async def _handle_instagram_webhook(request: Request, db: Session) -> Dict[str, 
                 )
 
                 message_id = processed_payload.get("message_id")
-                attachments = processed_payload.get("attachments") or []
-                if not isinstance(attachments, list):
-                    attachments = [attachments]
-                text_content = processed_payload.get("text") or ""
+                normalized_message_id = None
+                if message_id:
+                    if len(message_id) > INSTAGRAM_MESSAGE_ID_MAX_LENGTH:
+                        normalized_message_id = f"hash:{hashlib.sha256(message_id.encode('utf-8')).hexdigest()}"
+                    else:
+                        normalized_message_id = message_id
+                raw_attachments = processed_payload.get("attachments") or []
+                if not isinstance(raw_attachments, list):
+                    raw_attachments = [raw_attachments]
+                attachments = prepare_instagram_attachments(
+                    igsid=igsid,
+                    message_identifier=normalized_message_id or f"{timestamp_seconds}",
+                    attachments=raw_attachments
+                )
+                raw_text_content = processed_payload.get("text")
 
                 profile_data: Optional[Dict[str, Any]] = profile_cache.get(igsid)
                 if profile_data is None:
@@ -1310,7 +1695,8 @@ async def _handle_instagram_webhook(request: Request, db: Session) -> Dict[str, 
                 timestamp_seconds = int(raw_timestamp / 1000)
                 event_datetime = datetime.fromtimestamp(timestamp_seconds, tz=timezone.utc)
 
-                last_message_preview = text_content or ("[attachment]" if attachments else None)
+                resolved_text = resolve_message_text(raw_text_content, attachments)
+                last_message_preview = resolved_text
 
                 profile_username = None
                 profile_name = None
@@ -1331,13 +1717,13 @@ async def _handle_instagram_webhook(request: Request, db: Session) -> Dict[str, 
                     profile_name=profile_name
                 )
 
-                if message_id:
-                    existing_message = db.query(InstagramMessage).filter(
-                        InstagramMessage.message_id == message_id
+                if normalized_message_id:
+                    existing_message = db.query(InstagramMessageLog).filter(
+                        InstagramMessageLog.message_id == normalized_message_id
                     ).first()
                     if existing_message:
                         logger.info(
-                            "Duplicate Instagram message %s for user %s; skipping re-insert",
+                            "Duplicate Instagram message %s for user %s; skipping event",
                             message_id,
                             igsid
                         )
@@ -1348,20 +1734,34 @@ async def _handle_instagram_webhook(request: Request, db: Session) -> Dict[str, 
                 except (TypeError, ValueError):
                     raw_message_json = None
 
-                ig_message = InstagramMessage(
+                is_ticklegram_event = bool(is_echo or direction == InstagramMessageDirection.OUTBOUND)
+
+                ig_message = InstagramMessageLog(
                     igsid=igsid,
-                    message_id=message_id,
+                    message_id=normalized_message_id,
                     direction=direction,
-                    text=text_content,
+                    text=resolved_text,
                     attachments_json=json.dumps(attachments) if attachments else None,
                     ts=timestamp_seconds,
                     created_at=event_datetime,
-                    raw_payload_json=raw_message_json
+                    raw_payload_json=raw_message_json,
+                    is_ticklegram=is_ticklegram_event
                 )
                 db.add(ig_message)
+                try:
+                    db.flush()
+                except IntegrityError:
+                    db.rollback()
+                    logger.info(
+                        "Duplicate instagram_message %s detected; skipping insert",
+                        normalized_message_id or message_id
+                    )
+                    continue
+
 
                 chat: Optional[Chat] = None
-                new_message: Optional[Message] = None
+                new_message: Optional[InstagramChatMessage] = None
+                existing_chat: Optional[Chat] = None
 
                 if direction == InstagramMessageDirection.INBOUND:
                     chat = db.query(Chat).filter(
@@ -1407,19 +1807,108 @@ async def _handle_instagram_webhook(request: Request, db: Session) -> Dict[str, 
                             if updated_pic:
                                 chat.profile_pic_url = updated_pic
 
-                    new_message = Message(
-                        chat_id=chat.id,
+                    inbound_content = resolved_text or ("[attachment]" if attachments else "")
+                    inferred_type = MessageType.IMAGE if attachments else MessageType.TEXT
+                    new_message = create_chat_message_record(
+                        chat,
                         sender=MessageSender.INSTAGRAM_USER,
-                        content=text_content,
-                        message_type=MessageType.TEXT,
-                        platform=MessagePlatform.INSTAGRAM,
-                        timestamp=event_datetime
+                        content=inbound_content,
+                        message_type=inferred_type,
+                        timestamp=event_datetime,
+                        is_ticklegram=False,
+                        attachments_json=_dump_attachments_json(attachments)
                     )
+                    new_message.attachments = attachments
                     db.add(new_message)
 
-                    chat.last_message = text_content
+                    chat.last_message = inbound_content
                     chat.unread_count += 1
                     chat.updated_at = event_datetime
+                    existing_chat = chat
+                else:
+                    chat = db.query(Chat).filter(
+                        Chat.instagram_user_id == igsid,
+                        Chat.platform == MessagePlatform.INSTAGRAM,
+                        Chat.facebook_page_id == instagram_account_id
+                    ).first()
+
+                    if not chat:
+                        profile = profile_data
+                        if not profile:
+                            profile = await instagram_client.get_user_profile(
+                                page_access_token=page_access_token,
+                                user_id=igsid
+                            )
+                            if profile.get("success"):
+                                profile_cache[igsid] = profile
+                        username = (profile or {}).get("username") or (profile or {}).get("name") or f"IG User {igsid[:8]}"
+                        profile_pic_url = (profile or {}).get("profile_pic_url") or (profile or {}).get("profile_pic")
+                        if not profile_pic_url:
+                            profile_pic_url = f"https://via.placeholder.com/150?text={igsid[:8]}"
+
+                        chat = Chat(
+                            instagram_user_id=igsid,
+                            username=username,
+                            profile_pic_url=profile_pic_url,
+                            platform=MessagePlatform.INSTAGRAM,
+                            facebook_page_id=instagram_account_id,
+                            status=ChatStatus.UNASSIGNED
+                        )
+                        db.add(chat)
+                        db.flush()
+
+                    outbound_preview = resolved_text or ("[attachment]" if attachments else "")
+                    inferred_type = MessageType.IMAGE if attachments else MessageType.TEXT
+
+                    def _ts_diff_seconds(lhs: Optional[datetime], rhs: Optional[datetime]) -> Optional[float]:
+                        if not lhs or not rhs:
+                            return None
+                        lhs_local = lhs if lhs.tzinfo else lhs.replace(tzinfo=timezone.utc)
+                        rhs_local = rhs if rhs.tzinfo else rhs.replace(tzinfo=timezone.utc)
+                        return abs((lhs_local - rhs_local).total_seconds())
+
+                    dedup_candidate: Optional[InstagramChatMessage] = None
+                    message_model = _message_model_for_platform(chat.platform)
+                    recent_agent_messages = (
+                        message_query_for_chat(db, chat)
+                        .filter(
+                            message_model.chat_id == chat.id,
+                            message_model.sender == MessageSender.AGENT,
+                            message_model.is_ticklegram.is_(True)
+                        )
+                        .order_by(message_model.timestamp.desc())
+                        .limit(5)
+                        .all()
+                    )
+                    for candidate in recent_agent_messages:
+                        if (candidate.content or "").strip() != outbound_preview.strip():
+                            continue
+                        diff_seconds = _ts_diff_seconds(candidate.timestamp, event_datetime)
+                        if diff_seconds is not None and diff_seconds <= 30:
+                            dedup_candidate = candidate
+                            break
+
+                    if dedup_candidate:
+                        new_message = dedup_candidate
+                        new_message.attachments = attachments or getattr(new_message, "attachments", [])
+                        if attachments:
+                            new_message.attachments_json = _dump_attachments_json(attachments)
+                    else:
+                        new_message = create_chat_message_record(
+                            chat,
+                            sender=MessageSender.INSTAGRAM_PAGE,
+                            content=outbound_preview,
+                            message_type=inferred_type,
+                            timestamp=event_datetime,
+                            is_ticklegram=True,
+                            attachments_json=_dump_attachments_json(attachments)
+                        )
+                        new_message.attachments = attachments
+                        db.add(new_message)
+
+                    chat.last_message = outbound_preview
+                    chat.updated_at = event_datetime
+                    existing_chat = chat
 
                 db.flush()
                 db.commit()
@@ -1432,19 +1921,20 @@ async def _handle_instagram_webhook(request: Request, db: Session) -> Dict[str, 
                 if direction == InstagramMessageDirection.INBOUND:
                     notify_users = gather_dm_notify_users(db, chat)
                 else:
-                    existing_chat = db.query(Chat).filter(
-                        Chat.instagram_user_id == igsid,
-                        Chat.platform == MessagePlatform.INSTAGRAM
-                    ).first()
-                    notify_users = gather_dm_notify_users(db, existing_chat)
+                    if new_message:
+                        existing_chat = existing_chat or db.query(Chat).filter(
+                            Chat.instagram_user_id == igsid,
+                            Chat.platform == MessagePlatform.INSTAGRAM
+                        ).first()
+                        notify_users = gather_dm_notify_users(db, existing_chat)
 
                 # Broadcast legacy chat payload for inbound messages
                 if new_message and notify_users:
                     message_payload = MessageResponse.model_validate(new_message).model_dump(mode="json")
                     await ws_manager.broadcast_to_users(notify_users, {
                         "type": "new_message",
-                        "chat_id": str(chat.id),
-                        "platform": chat.platform.value,
+                        "chat_id": str((existing_chat or chat).id),
+                        "platform": (existing_chat or chat).platform.value,
                         "sender_id": sender_id,
                         "message": message_payload
                     })
@@ -1455,7 +1945,7 @@ async def _handle_instagram_webhook(request: Request, db: Session) -> Dict[str, 
                     "legacy_type": "instagram_dm",
                     "direction": direction.value,
                     "igsid": igsid,
-                    "text": text_content,
+                    "text": resolved_text,
                     "attachments": attachments,
                     "timestamp": timestamp_seconds,
                     "message_id": ig_message.id,
@@ -1597,10 +2087,11 @@ async def instagram_dm_send(
         raise HTTPException(status_code=502, detail=error_message)
 
     graph_message_id = send_result.get("message_id")
+    normalized_graph_message_id = graph_message_id[:255] if graph_message_id else None
     now_utc = datetime.now(timezone.utc)
     timestamp_seconds = int(now_utc.timestamp())
     attachments_json = json.dumps(payload.attachments) if payload.attachments else None
-    message_content = payload.text or ("[attachment]" if payload.attachments else "")
+    message_content = resolve_message_text(payload.text, payload.attachments or []) or ""
     last_message_preview = message_content or None
 
     profile_username = None
@@ -1622,9 +2113,9 @@ async def instagram_dm_send(
         profile_name=profile_name
     )
 
-    outbound_message = InstagramMessage(
+    outbound_message = InstagramMessageLog(
         igsid=payload.igsid,
-        message_id=graph_message_id,
+        message_id=normalized_graph_message_id,
         direction=InstagramMessageDirection.OUTBOUND,
         text=payload.text,
         attachments_json=attachments_json,
@@ -1634,7 +2125,8 @@ async def instagram_dm_send(
             "text": payload.text,
             "attachments": payload.attachments or [],
             "graph_message_id": graph_message_id
-        })
+        }),
+        is_ticklegram=True
     )
     db.add(outbound_message)
 
@@ -1669,14 +2161,16 @@ async def instagram_dm_send(
         chat.last_message = last_message_preview
     chat.updated_at = now_utc
 
-    message_record = Message(
-        chat_id=chat.id,
+    message_record = create_chat_message_record(
+        chat,
         sender=MessageSender.AGENT,
         content=message_content,
         message_type=MessageType.TEXT,
-        platform=MessagePlatform.INSTAGRAM,
-        timestamp=now_utc
+        timestamp=now_utc,
+        is_ticklegram=True,
+        attachments_json=attachments_json
     )
+    message_record.attachments = payload.attachments or []
     db.add(message_record)
 
     db.flush()
@@ -1736,7 +2230,8 @@ def list_chats(
 ):
     query = db.query(Chat).options(
         joinedload(Chat.assigned_agent),
-        joinedload(Chat.instagram_user)
+        joinedload(Chat.instagram_user),
+        joinedload(Chat.facebook_user)
     )
     
     # Filter by status
@@ -1762,11 +2257,18 @@ def list_chats(
 
 @api_router.get("/chats/{chat_id}", response_model=ChatWithMessages)
 def get_chat(chat_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    chat = db.query(Chat).options(
-        joinedload(Chat.messages),
-        joinedload(Chat.assigned_agent),
-        joinedload(Chat.instagram_user)
-    ).filter(Chat.id == chat_id).first()
+    chat = (
+        db.query(Chat)
+        .options(
+            joinedload(Chat.instagram_chat_messages),
+            joinedload(Chat.facebook_chat_messages),
+            joinedload(Chat.assigned_agent),
+            joinedload(Chat.instagram_user),
+            joinedload(Chat.facebook_user),
+        )
+        .filter(Chat.id == chat_id)
+        .first()
+    )
     
     if not chat:
         raise HTTPException(status_code=404, detail="Chat not found")
@@ -1778,6 +2280,16 @@ def get_chat(chat_id: str, current_user: User = Depends(get_current_user), db: S
     # Mark messages as read by resetting unread count
     chat.unread_count = 0
     db.commit()
+
+    for msg in chat.messages or []:
+        normalize_message_sender(msg)
+
+    instagram_msgs: List[InstagramMessageLog] = []
+    if chat.platform == MessagePlatform.INSTAGRAM:
+        instagram_msgs = db.query(InstagramMessageLog).filter(
+            InstagramMessageLog.igsid == chat.instagram_user_id
+        ).all()
+    hydrate_instagram_chat_messages(chat, instagram_msgs)
     
     return chat
 
@@ -1832,13 +2344,14 @@ async def send_message(chat_id: str, message_data: MessageCreate, current_user: 
         raise HTTPException(status_code=403, detail="Access denied")
     
     # Enforce Meta's 24-hour human agent policy
+    message_model = _message_model_for_platform(chat.platform)
     last_customer_message = (
-        db.query(Message)
+        message_query_for_chat(db, chat)
         .filter(
-            Message.chat_id == chat_id,
-            Message.sender != MessageSender.AGENT
+            message_model.chat_id == chat_id,
+            message_model.sender != MessageSender.AGENT
         )
-        .order_by(Message.timestamp.desc())
+        .order_by(message_model.timestamp.desc())
         .first()
     )
 
@@ -1856,13 +2369,15 @@ async def send_message(chat_id: str, message_data: MessageCreate, current_user: 
 
     # If in mock mode, just create the message without actual platform integration
     if instagram_client.mode == InstagramMode.MOCK and facebook_client.mode == FacebookMode.MOCK:
-        new_message = Message(
-            chat_id=chat_id,
+        new_message = create_chat_message_record(
+            chat,
             sender=MessageSender.AGENT,
             content=message_data.content,
             message_type=message_data.message_type,
-            platform=chat.platform
+            timestamp=datetime.now(timezone.utc),
+            is_ticklegram=True
         )
+        new_message.attachments = []
         db.add(new_message)
         chat.last_message = message_data.content
         chat.updated_at = datetime.now(timezone.utc)
@@ -1873,6 +2388,8 @@ async def send_message(chat_id: str, message_data: MessageCreate, current_user: 
     
     # For real mode, send through appropriate platform
     if chat.platform == MessagePlatform.FACEBOOK:
+        if not chat.facebook_user_id:
+            raise HTTPException(status_code=400, detail="Facebook user reference missing for this chat")
         # Get Facebook page access token
         if chat.facebook_page_id:
             fb_page = db.query(FacebookPage).filter(FacebookPage.page_id == chat.facebook_page_id).first()
@@ -1880,7 +2397,7 @@ async def send_message(chat_id: str, message_data: MessageCreate, current_user: 
                 # Send via Facebook Messenger
                 result = await facebook_client.send_text_message(
                     page_access_token=fb_page.access_token,
-                    recipient_id=chat.instagram_user_id,  # This is actually facebook_user_id for FB chats
+                    recipient_id=chat.facebook_user_id,
                     text=message_data.content
                 )
                 if not result.get("success"):
@@ -1911,13 +2428,15 @@ async def send_message(chat_id: str, message_data: MessageCreate, current_user: 
             raise HTTPException(status_code=400, detail="No Instagram account associated with this chat")
     
     # Create message record in database
-    new_message = Message(
-        chat_id=chat_id,
+    new_message = create_chat_message_record(
+        chat,
         sender=MessageSender.AGENT,
         content=message_data.content,
         message_type=message_data.message_type,
-        platform=chat.platform
+        timestamp=datetime.now(timezone.utc),
+        is_ticklegram=True
     )
+    new_message.attachments = []
     db.add(new_message)
     
     # Update chat
@@ -1976,7 +2495,7 @@ def get_dashboard_stats(current_user: User = Depends(get_current_user), db: Sess
             Chat.platform == MessagePlatform.FACEBOOK
         ).count()
     
-    total_messages = db.query(Message).count()
+    total_messages = db.query(InstagramChatMessage).count() + db.query(FacebookMessage).count()
     active_agents = db.query(User).filter(User.role == UserRole.AGENT).count()
     
     return DashboardStats(
@@ -2368,13 +2887,14 @@ async def send_template(
         raise HTTPException(status_code=400, detail=f"Template platform ({template.platform}) doesn't match chat platform ({chat.platform})")
     
     # Enforce Meta's 24-hour policy for template sending
+    message_model = _message_model_for_platform(chat.platform)
     last_customer_message = (
-        db.query(Message)
+        message_query_for_chat(db, chat)
         .filter(
-            Message.chat_id == chat.id,
-            Message.sender != MessageSender.AGENT
+            message_model.chat_id == chat.id,
+            message_model.sender != MessageSender.AGENT
         )
-        .order_by(Message.timestamp.desc())
+        .order_by(message_model.timestamp.desc())
         .first()
     )
 
@@ -2399,9 +2919,11 @@ async def send_template(
     
     # Auto-populate common variables from chat context
     username_value = None
-    if chat.instagram_user:
+    if chat.platform == MessagePlatform.INSTAGRAM and chat.instagram_user:
         username_value = chat.instagram_user.username or chat.instagram_user.name
-    username_value = username_value or chat.username or chat.instagram_user_id
+    if chat.platform == MessagePlatform.FACEBOOK and chat.facebook_user:
+        username_value = chat.facebook_user.username or chat.facebook_user.name
+    username_value = username_value or chat.username or chat.instagram_user_id or chat.facebook_user_id or ""
     message_content = message_content.replace("{username}", username_value)
     message_content = message_content.replace("{platform}", chat.platform.value)
     
@@ -2415,13 +2937,15 @@ async def send_template(
         )
     
     if instagram_client.mode == InstagramMode.MOCK and facebook_client.mode == FacebookMode.MOCK:
-        new_message = Message(
-            chat_id=chat.id,
+        new_message = create_chat_message_record(
+            chat,
             sender=MessageSender.AGENT,
             content=message_content,
             message_type=MessageType.TEXT,
-            platform=chat.platform
+            timestamp=datetime.now(timezone.utc),
+            is_ticklegram=True
         )
+        new_message.attachments = []
         db.add(new_message)
         chat.last_message = message_content
         chat.updated_at = datetime.now(timezone.utc)
@@ -2431,13 +2955,15 @@ async def send_template(
     else:
         # Send through appropriate platform
         if chat.platform == MessagePlatform.FACEBOOK:
+            if not chat.facebook_user_id:
+                raise HTTPException(status_code=400, detail="Facebook user reference missing for this chat")
             if chat.facebook_page_id:
                 fb_page = db.query(FacebookPage).filter(FacebookPage.page_id == chat.facebook_page_id).first()
                 if fb_page and fb_page.is_active:
                     if use_meta_template:
                         result = await facebook_client.send_template_message(
                             page_access_token=fb_page.access_token,
-                            recipient_id=chat.instagram_user_id,
+                            recipient_id=chat.facebook_user_id,
                             text=message_content,
                             template_id=template.meta_template_id,
                             tag=meta_template_tag
@@ -2445,7 +2971,7 @@ async def send_template(
                     else:
                         result = await facebook_client.send_text_message(
                             page_access_token=fb_page.access_token,
-                            recipient_id=chat.instagram_user_id,
+                            recipient_id=chat.facebook_user_id,
                             text=message_content
                         )
                     if not result.get("success"):
@@ -2480,13 +3006,15 @@ async def send_template(
             else:
                 raise HTTPException(status_code=400, detail="No Instagram account associated with this chat")
         
-        new_message = Message(
-            chat_id=chat.id,
+        new_message = create_chat_message_record(
+            chat,
             sender=MessageSender.AGENT,
             content=message_content,
             message_type=MessageType.TEXT,
-            platform=chat.platform
+            timestamp=datetime.now(timezone.utc),
+            is_ticklegram=True
         )
+        new_message.attachments = []
         db.add(new_message)
         chat.last_message = message_content
         chat.updated_at = datetime.now(timezone.utc)
@@ -2571,33 +3099,55 @@ async def handle_facebook_webhook(request: Request, db: Session = Depends(get_db
                             page_id=page_id
                         )
                         
-                        # Find or create chat
                         chat = db.query(Chat).filter(
-                            Chat.instagram_user_id == sender_id,
+                            Chat.facebook_user_id == sender_id,
                             Chat.platform == MessagePlatform.FACEBOOK,
                             Chat.facebook_page_id == page_id
                         ).first()
 
-                        # Get fresh user profile data if chat doesn't exist or username is generic
-                        should_update_profile = not chat or (chat and chat.username.startswith(("FB User", "User")))
-                        if should_update_profile:
+                        profile: Dict[str, Any] = {}
+                        need_profile = not chat or (chat and chat.username.startswith(("FB User", "User")))
+                        if need_profile:
                             profile = await facebook_client.get_user_profile(
                                 page_access_token=fb_page.access_token,
                                 user_id=sender_id
                             )
-                            username = profile.get("name", f"FB User {sender_id[:8]}")
-                            
-                            # Create new chat
-                            profile_pic_url = profile.get("profile_pic") if isinstance(profile, dict) else None
-                            # Support older get_user_profile shapes (profile_pic vs profile_pic_url)
-                            if not profile_pic_url:
-                                profile_pic_url = profile.get("profile_pic_url") if isinstance(profile, dict) else None
-                            if not profile_pic_url:
-                                profile_pic_url = f"https://via.placeholder.com/150?text={sender_id[:8]}"
 
+                        profile_name = profile.get("name") if isinstance(profile, dict) else None
+                        profile_pic_url = profile.get("profile_pic") if isinstance(profile, dict) else None
+                        if not profile_pic_url and isinstance(profile, dict):
+                            profile_pic_url = profile.get("profile_pic_url")
+                        if not profile_pic_url:
+                            profile_pic_url = f"https://via.placeholder.com/150?text={sender_id[:8]}"
+                        computed_username = profile_name or processed.get("sender_name") or f"FB User {sender_id[:8]}"
+
+                        facebook_user = db.query(FacebookUser).filter(FacebookUser.id == sender_id).first()
+                        if not facebook_user:
+                            facebook_user = FacebookUser(
+                                id=sender_id,
+                                username=computed_username,
+                                name=profile_name,
+                                profile_pic_url=profile_pic_url,
+                                last_message=processed.get("text", ""),
+                            )
+                            db.add(facebook_user)
+                            db.flush()
+                        else:
+                            facebook_user.last_message = processed.get("text", "") or facebook_user.last_message
+                            facebook_user.last_seen_at = datetime.now(timezone.utc)
+                            if profile_name:
+                                facebook_user.name = profile_name
+                            if computed_username:
+                                facebook_user.username = computed_username
+                            if profile_pic_url:
+                                facebook_user.profile_pic_url = profile_pic_url
+
+                        if not chat:
+                            temp_instagram_id = facebook_user.id if _requires_sqlite_instagram_fallback(db) else None
                             chat = Chat(
-                                instagram_user_id=sender_id,
-                                username=username,
+                                facebook_user_id=facebook_user.id,
+                                instagram_user_id=temp_instagram_id,
+                                username=computed_username,
                                 profile_pic_url=profile_pic_url,
                                 platform=MessagePlatform.FACEBOOK,
                                 facebook_page_id=page_id,
@@ -2605,15 +3155,22 @@ async def handle_facebook_webhook(request: Request, db: Session = Depends(get_db
                             )
                             db.add(chat)
                             db.flush()
-                        
-                        # Create message
-                        new_message = Message(
-                            chat_id=chat.id,
+                        elif not chat.facebook_user_id:
+                            chat.facebook_user_id = facebook_user.id
+
+                        if need_profile:
+                            chat.username = computed_username
+                            chat.profile_pic_url = profile_pic_url
+
+                        new_message = create_chat_message_record(
+                            chat,
                             sender=MessageSender.FACEBOOK_USER,
                             content=processed.get("text", ""),
                             message_type=MessageType.TEXT,
-                            platform=MessagePlatform.FACEBOOK
+                            timestamp=datetime.now(timezone.utc),
+                            is_ticklegram=False
                         )
+                        new_message.attachments = []
                         db.add(new_message)
                         
                         # Update chat
@@ -2687,12 +3244,15 @@ def simulate_incoming_message(chat_id: str, message: str, current_user: User = D
     if not chat:
         raise HTTPException(status_code=404, detail="Chat not found")
     
-    new_message = Message(
-        chat_id=chat_id,
-        sender=MessageSender.INSTAGRAM_USER,
+    new_message = create_chat_message_record(
+        chat,
+        sender=MessageSender.INSTAGRAM_USER if chat.platform == MessagePlatform.INSTAGRAM else MessageSender.FACEBOOK_USER,
         content=message,
-        message_type=MessageType.TEXT
+        message_type=MessageType.TEXT,
+        timestamp=datetime.now(timezone.utc),
+        is_ticklegram=False
     )
+    new_message.attachments = []
     db.add(new_message)
     
     chat.last_message = message

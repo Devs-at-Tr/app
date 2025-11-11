@@ -198,23 +198,23 @@ const DashboardContent = ({ user, onLogout }) => {
                 selectedPlatform={selectedPlatform}
                 onPlatformChange={handlePlatformChange}
               />
-              <TabsList className="flex items-center gap-2 bg-transparent border-none p-0">
+              <TabsList className="tg-pill-group flex items-center gap-2">
                 <TabsTrigger
                   value="chats"
-                  className="px-4 py-1.5 text-sm rounded-l-lg border border-gray-800 bg-[#1a1a2e] data-[state=active]:bg-purple-600 data-[state=active]:text-white"
+                  className="tg-tab-trigger px-4 py-1.5 text-sm"
                 >
                   Direct Messages
                 </TabsTrigger>
                 <TabsTrigger
                   value="comments"
-                  className="px-4 py-1.5 text-sm rounded-r-lg border border-gray-800 border-l-0 bg-[#1a1a2e] data-[state=active]:bg-purple-600 data-[state=active]:text-white"
+                  className="tg-tab-trigger px-4 py-1.5 text-sm"
                 >
                   Comments
                 </TabsTrigger>
                 {user.role === 'admin' && (
                   <TabsTrigger
                     value="templates"
-                    className="ml-3 px-4 py-1.5 text-sm rounded-lg border border-gray-800 bg-[#101023] text-gray-300 hover:text-white hover:bg-purple-500/20 data-[state=active]:bg-purple-600 data-[state=active]:text-white"
+                    className="tg-tab-trigger px-4 py-1.5 text-sm"
                   >
                     Templates
                   </TabsTrigger>
@@ -223,11 +223,11 @@ const DashboardContent = ({ user, onLogout }) => {
             </div>
 
             {user.role === 'admin' && (
-              <div className="flex items-center space-x-1">
+              <div className="flex items-center space-x-2">
                 <Button
                   onClick={() => setShowInstagramManager(true)}
-                  variant="outline"
-                  className="bg-[#1a1a2e] border-gray-800 text-pink-400 hover:text-pink-300 hover:bg-pink-500/10"
+                  variant="ghost"
+                  className="manage-btn manage-btn--ig"
                   data-testid="manage-instagram-accounts-button"
                 >
                   <Instagram className="w-4 h-4 mr-2" />
@@ -235,8 +235,8 @@ const DashboardContent = ({ user, onLogout }) => {
                 </Button>
                 <Button
                   onClick={() => setShowFacebookManager(true)}
-                  variant="outline"
-                  className="bg-[#1a1a2e] border-gray-800 text-blue-400 hover:text-blue-300 hover:bg-blue-500/10"
+                  variant="ghost"
+                  className="manage-btn manage-btn--fb"
                   data-testid="manage-facebook-pages-button"
                 >
                   <Settings className="w-4 h-4 mr-2" />

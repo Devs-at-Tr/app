@@ -6,7 +6,7 @@ import os
 import sys
 from sqlalchemy import create_engine, text
 from database import get_database_url, Base
-from models import MessageTemplate, User, Chat, Message, FacebookPage, InstagramAccount
+from models import MessageTemplate, User, Chat, FacebookPage, InstagramAccount
 
 def upgrade():
     """Create the message_templates table"""

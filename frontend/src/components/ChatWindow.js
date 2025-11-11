@@ -14,7 +14,7 @@ import {
 import { Badge } from './ui/badge';
 import { Send, UserPlus, Instagram, FileText, CheckCircle, Search, X } from 'lucide-react';
 import axios from 'axios';
-import { API } from '../App';
+import { API, BACKEND_URL } from '../App';
 import { useIsMobile } from '../hooks/useMediaQuery';
 import './ChatWindow.css';
 
@@ -176,7 +176,7 @@ const ChatWindow = ({ agents, userRole, onAssignChat }) => {
         continue;
       }
       const sender = (message.sender || '').toString().toLowerCase();
-      if (sender !== 'agent') {
+      if (sender !== 'agent' && sender !== 'instagram_page') {
         if (!message.timestamp) {
           return null;
         }
@@ -273,6 +273,7 @@ const ChatWindow = ({ agents, userRole, onAssignChat }) => {
       </div>
     );
   }
+  console.log('Rendering ChatWindow for chat:', chat);
   return (
     <div
       className={`bg-[#1a1a2e] border border-gray-800 h-full w-full min-h-0 flex ${isMobile ? 'flex-col' : 'rounded-xl'}`}
@@ -363,26 +364,105 @@ const ChatWindow = ({ agents, userRole, onAssignChat }) => {
           {chat.messages && chat.messages.length === 0 ? (
             <div className="text-center text-gray-500 mt-8">No messages yet</div>
           ) : (
-            chat.messages?.map((msg) => (
-              <div
-                key={msg.id}
-                className={`message-bubble flex ${msg.sender === 'agent' ? 'justify-end' : 'justify-start'}`}
-                data-testid={`message-${msg.id}`}
-              >
+            chat.messages?.map((msg) => {
+              const senderType = (msg.sender || '').toString().toLowerCase();
+              const isInstagramPage = senderType === 'instagram_page';
+              const isAgentMessage = senderType === 'agent' || isInstagramPage;
+              const isTicklegramMessage = Boolean(msg.is_ticklegram);
+              const showAsTicklegram = isTicklegramMessage && isAgentMessage;
+              const bubbleClasses = showAsTicklegram
+                ? 'bubble-agent'
+                : isInstagramPage
+                  ? 'bubble-agent-external'
+                  : isAgentMessage
+                    ? 'bubble-agent'
+                    : 'bubble-user';
+              const originLabel = showAsTicklegram
+                ? 'Sent from Ticklegram'
+                : isInstagramPage
+                  ? 'Sent from Instagram app'
+                  : '';
+              const attachments = Array.isArray(msg.attachments) ? msg.attachments : [];
+              const hasAttachments = attachments.length > 0;
+              const placeholderText = (msg.content || '').trim().toLowerCase();
+              const hideText = hasAttachments && (placeholderText === '[attachment]' || placeholderText === '');
+              const displayText = hideText ? '' : msg.content;
+
+              const resolveAttachmentUrl = (attachment) => {
+                const source =
+                  attachment?.public_url ||
+                  attachment?.payload?.url ||
+                  attachment?.url ||
+                  '';
+                if (!source) {
+                  return null;
+                }
+                if (source.startsWith('http')) {
+                  return source;
+                }
+                const base = BACKEND_URL || '';
+                return `${base}${source}`;
+              };
+
+              return (
                 <div
-                  className={`max-w-[70%] rounded-2xl px-4 py-3 ${
-                    msg.sender === 'agent'
-                      ? 'bg-gradient-to-r from-purple-600 to-pink-600 text-white'
-                      : 'bg-[#0f0f1a] text-gray-200 border border-gray-700'
-                  }`}
+                  key={msg.id}
+                  className={`message-bubble flex ${isAgentMessage ? 'justify-end' : 'justify-start'}`}
+                  data-testid={`message-${msg.id}`}
                 >
-                  <p className="text-sm">{msg.content}</p>
-                  <p className={`text-xs mt-1 ${msg.sender === 'agent' ? 'text-purple-200' : 'text-gray-500'}`}>
-                    {formatMessageTime(msg.timestamp)}
-                  </p>
+                  <div
+                    className={`max-w-[70%] rounded-2xl px-4 py-3 ${bubbleClasses}`}
+                  >
+                    {displayText && (
+                      <p className="text-sm whitespace-pre-line break-words">{displayText}</p>
+                    )}
+                    {originLabel && (
+                      <p className="text-[11px] text-purple-200/80 italic mt-1">
+                        {originLabel}
+                      </p>
+                    )}
+                    {attachments.length > 0 && (
+                      <div className="mt-3 space-y-2">
+                        {attachments.map((attachment, index) => {
+                          const attachmentUrl = resolveAttachmentUrl(attachment);
+                          if (attachment.type === 'image' && attachmentUrl) {
+                            return (
+                              <img
+                                key={`image-${msg.id}-${index}`}
+                                src={attachmentUrl}
+                                alt={`attachment-${index + 1}`}
+                                className="max-h-64 w-full rounded-xl object-cover border border-white/10"
+                              />
+                            );
+                          }
+                          if (!attachmentUrl) {
+                            return null;
+                          }
+                          return (
+                            <a
+                              key={`file-${msg.id}-${index}`}
+                              href={attachmentUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="block text-xs text-purple-200 underline break-all"
+                            >
+                              View attachment
+                            </a>
+                          );
+                        })}
+                      </div>
+                    )}
+                    <p
+                      className={`text-xs mt-1 ${
+                        isAgentMessage ? 'text-purple-200' : 'text-gray-500'
+                      }`}
+                    >
+                      {formatMessageTime(msg.timestamp)}
+                    </p>
+                  </div>
                 </div>
-              </div>
-            ))
+              );
+            })
           )}
           <div ref={messagesEndRef} />
         </div>

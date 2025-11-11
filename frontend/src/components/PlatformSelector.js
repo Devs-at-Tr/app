@@ -16,7 +16,7 @@ const PlatformSelector = ({ selectedPlatform, onPlatformChange }) => {
   ];
 
   return (
-    <div className="flex space-x-2 bg-[#1a1a2e] border border-gray-800 rounded-lg p-1" data-testid="platform-selector">
+    <div className="tg-pill-group flex space-x-2" data-testid="platform-selector">
       {platforms.map((platform) => {
         const Icon = platform.icon;
         const isSelected = selectedPlatform === platform.id;
@@ -25,13 +25,9 @@ const PlatformSelector = ({ selectedPlatform, onPlatformChange }) => {
           <Button
             key={platform.id}
             onClick={() => onPlatformChange(platform.id)}
-            variant={isSelected ? "default" : "ghost"}
+            variant="ghost"
             size="sm"
-            className={`flex items-center space-x-2 ${
-              isSelected
-                ? 'bg-gradient-to-r from-purple-600 to-pink-600 text-white hover:from-purple-700 hover:to-pink-700'
-                : 'text-gray-400 hover:text-white hover:bg-[#0f0f1a]'
-            }`}
+            className={`platform-btn flex items-center space-x-2 ${isSelected ? 'platform-btn--active' : ''}`}
             data-testid={`platform-${platform.id}`}
           >
             {Icon && <Icon className="w-4 h-4" />}

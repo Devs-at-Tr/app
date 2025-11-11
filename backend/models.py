@@ -18,9 +18,10 @@ class ChatStatus(str, enum.Enum):
     UNASSIGNED = "unassigned"
 
 class MessageSender(str, enum.Enum):
-    AGENT = "agent"
-    INSTAGRAM_USER = "instagram_user"
-    FACEBOOK_USER = "facebook_user"
+    AGENT = "AGENT"
+    INSTAGRAM_USER = "INSTAGRAM_USER"
+    FACEBOOK_USER = "FACEBOOK_USER"
+    INSTAGRAM_PAGE = "INSTAGRAM_PAGE"
 
 class MessageType(str, enum.Enum):
     TEXT = "text"
@@ -75,7 +76,8 @@ class Chat(Base):
     __tablename__ = "chats"
     
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    instagram_user_id = Column(String(255), ForeignKey("instagram_users.igsid"), nullable=False, index=True)
+    instagram_user_id = Column(String(255), ForeignKey("instagram_users.igsid"), nullable=True, index=True)
+    facebook_user_id = Column(String(255), ForeignKey("facebook_users.id"), nullable=True, index=True)
     username = Column(String(255), nullable=False)
     profile_pic_url = Column(Text, nullable=True)
     last_message = Column(Text, nullable=True)
@@ -87,22 +89,81 @@ class Chat(Base):
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
     
-    messages = relationship("Message", back_populates="chat", cascade="all, delete-orphan", order_by="Message.timestamp")
+    instagram_chat_messages = relationship(
+        "InstagramMessage",
+        back_populates="chat",
+        cascade="all, delete-orphan",
+        order_by="InstagramMessage.timestamp"
+    )
+    facebook_chat_messages = relationship(
+        "FacebookMessage",
+        back_populates="chat",
+        cascade="all, delete-orphan",
+        order_by="FacebookMessage.timestamp"
+    )
     instagram_user = relationship("InstagramUser", back_populates="chats")
+    facebook_user = relationship("FacebookUser", back_populates="chats")
     assigned_agent = relationship("User", back_populates="assigned_chats", foreign_keys=[assigned_to])
 
-class Message(Base):
-    __tablename__ = "messages"
-    
+    @property
+    def messages(self):
+        override = getattr(self, "_messages_override", None)
+        if override is not None:
+            return override
+        if self.platform == MessagePlatform.FACEBOOK:
+            return self.facebook_chat_messages
+        return self.instagram_chat_messages
+
+    @messages.setter
+    def messages(self, value):
+        self._messages_override = value
+
+class FacebookUser(Base):
+    __tablename__ = "facebook_users"
+
+    id = Column(String(255), primary_key=True)
+    first_seen_at = Column(DateTime(timezone=True), default=utc_now)
+    last_seen_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+    last_message = Column(Text, nullable=True)
+    username = Column(String(255), nullable=True)
+    name = Column(String(255), nullable=True)
+    profile_pic_url = Column(Text, nullable=True)
+
+    chats = relationship("Chat", back_populates="facebook_user")
+    messages = relationship("FacebookMessage", back_populates="facebook_user", cascade="all, delete-orphan")
+
+
+class ChatMessageMixin:
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     chat_id = Column(String(36), ForeignKey("chats.id"), nullable=False)
     sender = Column(SQLEnum(MessageSender), nullable=False)
     content = Column(Text, nullable=False)
     message_type = Column(SQLEnum(MessageType), nullable=False, default=MessageType.TEXT)
-    platform = Column(SQLEnum(MessagePlatform), nullable=False, default=MessagePlatform.INSTAGRAM)
     timestamp = Column(DateTime(timezone=True), default=utc_now)
-    
-    chat = relationship("Chat", back_populates="messages")
+    attachments_json = Column(Text, nullable=True)
+    metadata_json = Column(Text, nullable=True)
+    is_gif = Column(Boolean, nullable=False, default=False)
+    is_ticklegram = Column(Boolean, nullable=False, default=False)
+
+
+class InstagramMessage(ChatMessageMixin, Base):
+    __tablename__ = "instagram_messages"
+
+    platform = Column(SQLEnum(MessagePlatform), nullable=False, default=MessagePlatform.INSTAGRAM)
+    instagram_user_id = Column(String(255), ForeignKey("instagram_users.igsid"), nullable=False, index=True)
+
+    chat = relationship("Chat", back_populates="instagram_chat_messages")
+    instagram_user = relationship("InstagramUser", back_populates="chat_messages")
+
+
+class FacebookMessage(ChatMessageMixin, Base):
+    __tablename__ = "facebook_messages"
+
+    platform = Column(SQLEnum(MessagePlatform), nullable=False, default=MessagePlatform.FACEBOOK)
+    facebook_user_id = Column(String(255), ForeignKey("facebook_users.id"), nullable=False, index=True)
+
+    chat = relationship("Chat", back_populates="facebook_chat_messages")
+    facebook_user = relationship("FacebookUser", back_populates="messages")
 
 class FacebookPage(Base):
     __tablename__ = "facebook_pages"
@@ -146,23 +207,27 @@ class InstagramUser(Base):
     username = Column(String(255), nullable=True)
     name = Column(String(255), nullable=True)
 
-    messages = relationship("InstagramMessage", back_populates="user", cascade="all, delete-orphan")
+    message_logs = relationship("InstagramMessageLog", back_populates="user", cascade="all, delete-orphan")
+    chat_messages = relationship("InstagramMessage", back_populates="instagram_user")
     chats = relationship("Chat", back_populates="instagram_user")
 
-class InstagramMessage(Base):
-    __tablename__ = "instagram_messages"
+class InstagramMessageLog(Base):
+    __tablename__ = "instagram_message_logs"
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     igsid = Column(String(255), ForeignKey("instagram_users.igsid"), nullable=False, index=True)
-    message_id = Column(String(255), nullable=True, unique=True, index=True)
+    message_id = Column(String(512), nullable=True, unique=True, index=True)
     direction = Column(SQLEnum(InstagramMessageDirection), nullable=False)
     text = Column(Text, nullable=True)
     attachments_json = Column(Text, nullable=True)
     ts = Column(BigInteger, nullable=False, index=True)
     created_at = Column(DateTime(timezone=True), default=utc_now)
     raw_payload_json = Column(Text, nullable=True)
+    metadata_json = Column(Text, nullable=True)
+    is_gif = Column(Boolean, nullable=False, default=False)
+    is_ticklegram = Column(Boolean, nullable=False, default=False)
 
-    user = relationship("InstagramUser", back_populates="messages")
+    user = relationship("InstagramUser", back_populates="message_logs")
 
 class InstagramComment(Base):
     __tablename__ = "instagram_comments"

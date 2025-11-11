@@ -1,5 +1,15 @@
 from database import SessionLocal, engine, Base
-from models import User, Chat, Message, UserRole, ChatStatus, MessageSender, MessageType, InstagramAccount, MessagePlatform
+from models import (
+    User,
+    Chat,
+    InstagramMessage,
+    UserRole,
+    ChatStatus,
+    MessageSender,
+    MessageType,
+    InstagramAccount,
+    MessagePlatform,
+)
 from auth import get_password_hash
 import random
 import uuid
@@ -96,11 +106,13 @@ def seed_database():
             
             # Add messages to chat
             for j in range(random.randint(2, 4)):
-                msg = Message(
+                msg = InstagramMessage(
                     chat_id=chat.id,
+                    instagram_user_id=ig_user_id,
                     sender=MessageSender.INSTAGRAM_USER if j % 2 == 0 else MessageSender.AGENT,
                     content=random.choice(messages_pool),
-                    message_type=MessageType.TEXT
+                    message_type=MessageType.TEXT,
+                    platform=MessagePlatform.INSTAGRAM
                 )
                 db.add(msg)
         

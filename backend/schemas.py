@@ -78,12 +78,26 @@ class MessageResponse(BaseModel):
     message_type: MessageType
     platform: MessagePlatform
     timestamp: datetime
+    is_ticklegram: bool = False
+    attachments: List[Dict[str, Any]] = Field(default_factory=list)
+    attachments_json: Optional[str] = Field(default=None, exclude=True)
+    metadata_json: Optional[str] = Field(default=None, exclude=True)
+    is_gif: Optional[bool] = Field(default=False, exclude=True)
     
     class Config:
         from_attributes = True
         
     def model_post_init(self, _):
         self.timestamp = convert_to_ist(self.timestamp)
+        if not self.attachments:
+            raw = self.attachments_json
+            if raw:
+                try:
+                    self.attachments = json.loads(raw)
+                except (TypeError, ValueError):
+                    self.attachments = []
+            else:
+                self.attachments = []
 
 class InstagramUserSchema(BaseModel):
     igsid: str
@@ -92,6 +106,23 @@ class InstagramUserSchema(BaseModel):
     last_message: Optional[str] = None
     username: Optional[str] = None
     name: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+    def model_post_init(self, _):
+        self.first_seen_at = convert_to_ist(self.first_seen_at)
+        self.last_seen_at = convert_to_ist(self.last_seen_at)
+
+
+class FacebookUserSchema(BaseModel):
+    id: str
+    first_seen_at: datetime
+    last_seen_at: datetime
+    last_message: Optional[str] = None
+    username: Optional[str] = None
+    name: Optional[str] = None
+    profile_pic_url: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -236,7 +267,8 @@ class ChatAssign(BaseModel):
 
 class ChatResponse(BaseModel):
     id: str
-    instagram_user_id: str
+    instagram_user_id: Optional[str] = None
+    facebook_user_id: Optional[str] = None
     username: str
     profile_pic_url: Optional[str]
     last_message: Optional[str]
@@ -249,6 +281,7 @@ class ChatResponse(BaseModel):
     updated_at: datetime
     assigned_agent: Optional[UserResponse] = None
     instagram_user: Optional[InstagramUserSchema] = None
+    facebook_user: Optional[FacebookUserSchema] = None
     
     class Config:
         from_attributes = True

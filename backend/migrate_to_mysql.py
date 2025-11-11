@@ -3,7 +3,16 @@ Migration script to create MySQL database schema
 Run this script to initialize the MySQL database with all tables
 """
 from database import Base, engine
-from models import User, InstagramAccount, Chat, Message, FacebookPage
+from models import (
+    User,
+    InstagramAccount,
+    Chat,
+    InstagramMessage,
+    FacebookMessage,
+    FacebookUser,
+    FacebookPage,
+    InstagramMessageLog,
+)
 import sys
 
 def create_tables():
@@ -19,7 +28,10 @@ def create_tables():
         print("  - users")
         print("  - instagram_accounts")
         print("  - chats")
-        print("  - messages")
+        print("  - instagram_messages")
+        print("  - facebook_messages")
+        print("  - instagram_message_logs")
+        print("  - facebook_users")
         print("  - facebook_pages")
         
         return True

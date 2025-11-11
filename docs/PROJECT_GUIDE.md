@@ -47,6 +47,11 @@ This single reference replaces the scattered Markdown notes that used to live at
    - Frontend issues: Node 14+, `npm install`, port 3000 usage
    - Use README for deeper setup details.
 
+### Database Model Updates
+- Run `python -m migrations.runner` to apply timestamped migrations (files named `YYYYMMDD_HHMMSS_description.py`). Add new files for every schema change instead of editing legacy scripts.
+- Conversations now live in platform-specific tables (`instagram_messages`, `facebook_messages`). Instagram webhook archives were renamed to `instagram_message_logs`.
+- Facebook recipients have a first-class `facebook_users` table; chats now reference either `facebook_user_id` or `instagram_user_id` based on platform. The legacy `messages` table was retired after migrating its rows into the new platform tables.
+
 ---
 
 ## Platform Integrations

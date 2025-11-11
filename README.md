@@ -92,9 +92,9 @@ A full-stack messaging management platform designed for teams to efficiently han
    FACEBOOK_API_VERSION=v20.0
    ```
 
-4. **Run database migration (if needed)**
+4. **Run database migrations**
    ```bash
-   python migration_add_facebook_support.py
+   python -m migrations.runner
    ```
 
 5. **Seed demo data (optional)**
@@ -106,6 +106,11 @@ A full-stack messaging management platform designed for teams to efficiently han
    ```bash
    uvicorn server:app --reload --port 8000
    ```
+
+### Database Workflow Notes
+- `migrations/runner.py` applies every timestamped migration (pattern `YYYYMMDD_HHMMSS_<name>.py`). Create a new file following that convention each time the schema changes.
+- Chat history now lives in platform-specific tables: `instagram_messages` and `facebook_messages`. Incoming payload archives continue to flow into `instagram_message_logs`.
+- Facebook identity data sits in the new `facebook_users` lookup while Instagram continues to use `instagram_users`. Chats reference the correct user table through `facebook_user_id` or `instagram_user_id`.
 
 ### Frontend Setup
 

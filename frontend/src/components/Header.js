@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { Button } from './ui/button';
 import { 
   DropdownMenu,
@@ -8,12 +8,31 @@ import {
   DropdownMenuSeparator
 } from './ui/dropdown-menu';
 import { Sheet, SheetContent, SheetTrigger } from './ui/sheet';
-import { LogOut, User, Menu } from 'lucide-react';
+import { LogOut, User, Menu, Sun, Moon } from 'lucide-react';
 import { useIsMobile } from '../hooks/useMediaQuery';
+import { useTheme } from '../context/ThemeContext';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogTrigger
+} from './ui/alert-dialog';
 
 const Header = ({ user, onLogout, onMenuClick }) => {
   const isMobile = useIsMobile();
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const { theme, toggleTheme } = useTheme();
+
+  const themeToggleText = theme === 'dark' ? 'Light Mode' : 'Dark Mode';
+  const themeToggleIcon = theme === 'dark' ? <Sun className="w-4 h-4 mr-2" /> : <Moon className="w-4 h-4 mr-2" />;
+  const themeToggleClass =
+    theme === 'dark'
+      ? 'theme-toggle theme-toggle--dark'
+      : 'theme-toggle theme-toggle--light';
 
   return (
     <header className="bg-[#1a1a2e] border-b border-gray-800 sticky top-0 z-50" data-testid="dashboard-header">
@@ -45,6 +64,15 @@ const Header = ({ user, onLogout, onMenuClick }) => {
 
         {/* Desktop View */}
         <div className="hidden md:flex items-center space-x-4">
+          <Button
+            variant="ghost"
+            onClick={toggleTheme}
+            className={themeToggleClass}
+            data-testid="theme-toggle"
+          >
+            {themeToggleIcon}
+            {themeToggleText}
+          </Button>
           <div className="flex items-center space-x-2 px-4 py-2 bg-[#0f0f1a] rounded-lg border border-gray-800">
             <User className="w-4 h-4 text-purple-400" />
             <div>
@@ -53,15 +81,37 @@ const Header = ({ user, onLogout, onMenuClick }) => {
             </div>
           </div>
           
-          <Button
-            onClick={onLogout}
-            data-testid="logout-button"
-            variant="outline"
-            className="bg-red-500/10 border-red-500/50 hover:bg-red-500/20 text-red-400"
-          >
-            <LogOut className="w-4 h-4 mr-2" />
-            Logout
-          </Button>
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                data-testid="logout-button"
+                variant="outline"
+                className="bg-red-500/10 border-red-500/50 hover:bg-red-500/20 text-red-400"
+              >
+                <LogOut className="w-4 h-4 mr-2" />
+                Logout
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent className="bg-[#1a1a2e] border-gray-700 text-white">
+              <AlertDialogHeader>
+                <AlertDialogTitle>Sign out?</AlertDialogTitle>
+                <AlertDialogDescription className="text-gray-400">
+                  You will be logged out of TickleGram on this device. You can log back in anytime.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel className="bg-transparent border border-gray-700 text-gray-300 hover:bg-gray-800">
+                  Stay
+                </AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={onLogout}
+                  className="bg-gradient-to-r from-red-500 to-rose-500 text-white hover:from-red-600 hover:to-rose-600"
+                >
+                  Logout
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </div>
 
         {/* Mobile View - User Dropdown */}
@@ -86,14 +136,51 @@ const Header = ({ user, onLogout, onMenuClick }) => {
                 <p className="text-sm font-medium text-white" data-testid="user-name-mobile">{user.name}</p>
                 <p className="text-xs text-gray-400 capitalize" data-testid="user-role-mobile">{user.role}</p>
               </div>
-              <DropdownMenuSeparator className="bg-gray-700" />
-              <DropdownMenuItem 
-                onClick={onLogout}
-                className="text-red-400 hover:bg-red-500/10 cursor-pointer min-h-[44px]"
-                data-testid="logout-button-mobile"
+              <DropdownMenuItem
+                onClick={toggleTheme}
+                className="text-sm text-gray-200 hover:bg-purple-500/10 cursor-pointer min-h-[44px]"
               >
-                <LogOut className="w-4 h-4 mr-2" />
-                Logout
+                {theme === 'dark' ? (
+                  <>
+                    <Sun className="w-4 h-4 mr-2 text-amber-300" />
+                    Light Mode
+                  </>
+                ) : (
+                  <>
+                    <Moon className="w-4 h-4 mr-2 text-purple-400" />
+                    Dark Mode
+                  </>
+                )}
+              </DropdownMenuItem>
+              <DropdownMenuSeparator className="bg-gray-700" />
+              <DropdownMenuItem asChild data-testid="logout-button-mobile">
+                <AlertDialog>
+                  <AlertDialogTrigger asChild>
+                    <button className="w-full text-left text-red-400 hover:bg-red-500/10 cursor-pointer min-h-[44px] flex items-center">
+                      <LogOut className="w-4 h-4 mr-2" />
+                      Logout
+                    </button>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent className="bg-[#1a1a2e] border-gray-700 text-white">
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Sign out?</AlertDialogTitle>
+                      <AlertDialogDescription className="text-gray-400">
+                        You will be logged out of TickleGram on this device. You can log back in anytime.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel className="bg-transparent border border-gray-700 text-gray-300 hover:bg-gray-800">
+                        Stay
+                      </AlertDialogCancel>
+                      <AlertDialogAction
+                        onClick={onLogout}
+                        className="bg-gradient-to-r from-red-500 to-rose-500 text-white hover:from-red-600 hover:to-rose-600"
+                      >
+                        Logout
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>

@@ -9,7 +9,7 @@ const FacebookIcon = ({ className }) => (
 
 const StatCard = ({ icon: Icon, label, value, color, dataTestId, subStats }) => {
   return (
-    <div className={`stat-card bg-[#1a1a2e] border border-gray-800 rounded-xl p-4`} data-testid={dataTestId}>
+    <div className={`stat-card bg-[#1a1a2e] border border-gray-800 rounded-xl p-4 shadow-card`} data-testid={dataTestId}>
       <div className="flex items-center justify-between mb-1.5">
         <div>
           <p className="text-gray-400 text-xs uppercase tracking-wide mb-1">{label}</p>

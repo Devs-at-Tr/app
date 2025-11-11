@@ -46,7 +46,8 @@ export const ChatProvider = ({ children, userRole }) => {
 
   const updateChatMessages = useCallback((chatId, newMessage, options = {}) => {
     const { chatExists = true } = options;
-    const isAgentMessage = newMessage.sender === 'agent';
+    const sender = (newMessage.sender || '').toString().toLowerCase();
+    const isAgentMessage = sender === 'agent' || sender === 'instagram_page';
     const isActiveChat = selectedChat?.id === chatId;
 
     setChats(currentChats =>
@@ -133,7 +134,15 @@ export const ChatProvider = ({ children, userRole }) => {
         if (!currentChat) {
           return null;
         }
-        return chatsData.find(chat => chat.id === currentChat.id) || null;
+        const refreshed = chatsData.find(chat => chat.id === currentChat.id);
+        if (!refreshed) {
+          return currentChat;
+        }
+        return {
+          ...currentChat,
+          ...refreshed,
+          messages: currentChat.messages || [],
+        };
       });
       return chatsData;
     } catch (error) {
@@ -222,7 +231,8 @@ export const ChatProvider = ({ children, userRole }) => {
         }
         
         // Chat exists, update it
-        const isAgentMessage = data.message.sender === 'agent';
+        const sender = (data.message.sender || '').toString().toLowerCase();
+        const isAgentMessage = sender === 'agent' || sender === 'instagram_page';
         
         return sortChatsByRecency(
           currentChats.map(chat => {
@@ -272,7 +282,9 @@ export const ChatProvider = ({ children, userRole }) => {
           last_message: data.message.content,
           last_message_timestamp: data.message.timestamp || currentChat.last_message_timestamp,
           unread_count: 0,
-          status: data.message.sender === 'agent' ? 'assigned' : currentChat.status
+            status: (data.message.sender === 'agent' || data.message.sender === 'instagram_page')
+              ? 'assigned'
+              : currentChat.status
         };
       });
     }

@@ -3,12 +3,13 @@ import './App.css';
 import axios from 'axios';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { WebSocketProvider } from './context/WebSocketContext';
+import { ThemeProvider } from './context/ThemeContext';
 import LoginPage from './pages/LoginPage';
 import DashboardPage from './pages/DashboardPage';
 import SignupPage from './pages/SignupPage';
 
 // Get backend URL from environment or use relative path for Kubernetes ingress
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || '';
+export const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || '';
 export const API = BACKEND_URL ? `${BACKEND_URL}/api` : '/api';
 
 function App() {
@@ -67,42 +68,44 @@ function App() {
   }
 
   return (
-    <WebSocketProvider token={user ? localStorage.getItem('token') : null}>
-      <BrowserRouter>
-        <Routes>
-          <Route
-            path="/login"
-            element={
-              !user ? (
-                <LoginPage onLogin={handleLogin} />
-              ) : (
-                <Navigate to="/" replace />
-              )
-            }
-          />
-          <Route
-            path="/signup"
-            element={
-              !user ? (
-                <SignupPage />
-              ) : (
-                <Navigate to="/" replace />
-              )
-            }
-          />
-          <Route
-            path="/"
-            element={
-              user ? (
-                <DashboardPage user={user} onLogout={handleLogout} />
-              ) : (
-                <Navigate to="/login" replace />
-              )
-            }
-          />
-        </Routes>
-      </BrowserRouter>
-    </WebSocketProvider>
+    <ThemeProvider>
+      <WebSocketProvider token={user ? localStorage.getItem('token') : null}>
+        <BrowserRouter>
+          <Routes>
+            <Route
+              path="/login"
+              element={
+                !user ? (
+                  <LoginPage onLogin={handleLogin} />
+                ) : (
+                  <Navigate to="/" replace />
+                )
+              }
+            />
+            <Route
+              path="/signup"
+              element={
+                !user ? (
+                  <SignupPage />
+                ) : (
+                  <Navigate to="/" replace />
+                )
+              }
+            />
+            <Route
+              path="/"
+              element={
+                user ? (
+                  <DashboardPage user={user} onLogout={handleLogout} />
+                ) : (
+                  <Navigate to="/login" replace />
+                )
+              }
+            />
+          </Routes>
+        </BrowserRouter>
+      </WebSocketProvider>
+    </ThemeProvider>
   );
 }
 

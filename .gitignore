@@ -54,6 +54,8 @@ venv/
 *.db
 *.sqlite
 *.sqlite3
+backend/attachments/*
+!backend/attachments/.gitkeep
 
 # Development tools
 chainlit.md
