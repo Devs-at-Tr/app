@@ -4,10 +4,12 @@ from database import Base
 from datetime import datetime, timezone
 import uuid
 import enum
+from utils.timezone import now_ist
+
 
 def utc_now():
-    """Get current time in UTC with timezone info"""
-    return datetime.now(timezone.utc)
+    """Return current Asia/Kolkata time (backwards-compatible helper)."""
+    return now_ist()
 
 class UserRole(str, enum.Enum):
     ADMIN = "admin"
@@ -54,8 +56,8 @@ class User(Base):
     email = Column(String(255), unique=True, nullable=False, index=True)
     password_hash = Column(String(255), nullable=False)
     role = Column(SQLEnum(UserRole), nullable=False, default=UserRole.AGENT)
-    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
-    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), default=now_ist)
+    updated_at = Column(DateTime(timezone=True), default=now_ist, onupdate=now_ist)
     
     instagram_accounts = relationship("InstagramAccount", back_populates="user", cascade="all, delete-orphan")
     assigned_chats = relationship("Chat", back_populates="assigned_agent", foreign_keys="Chat.assigned_to")
@@ -68,7 +70,7 @@ class InstagramAccount(Base):
     page_id = Column(String(255), nullable=False)
     access_token = Column(String(500), nullable=False)
     username = Column(String(255), nullable=True)
-    connected_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    connected_at = Column(DateTime(timezone=True), default=now_ist)
     
     user = relationship("User", back_populates="instagram_accounts")
 
@@ -86,8 +88,8 @@ class Chat(Base):
     unread_count = Column(Integer, default=0)
     platform = Column(SQLEnum(MessagePlatform), nullable=False, default=MessagePlatform.INSTAGRAM, index=True)
     facebook_page_id = Column(String(255), nullable=True)
-    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
-    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), default=now_ist)
+    updated_at = Column(DateTime(timezone=True), default=now_ist, onupdate=now_ist)
     
     instagram_chat_messages = relationship(
         "InstagramMessage",

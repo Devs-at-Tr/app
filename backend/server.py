@@ -19,6 +19,7 @@ import re
 import requests
 import hashlib
 from database import engine, get_db, Base
+from utils.timezone import now_ist
 from migrations.runner import run_all_migrations as ensure_instagram_profile_schema
 from models import (
     User,
@@ -440,7 +441,7 @@ def hydrate_instagram_chat_messages(chat: Optional[Chat], instagram_msgs: List[I
     def _ts(msg: InstagramChatMessage) -> datetime:
         if msg.timestamp:
             return msg.timestamp if msg.timestamp.tzinfo else msg.timestamp.replace(tzinfo=timezone.utc)
-        return datetime.now(timezone.utc)
+        return now_ist()
 
     chat.messages.sort(key=_ts)
 
@@ -645,7 +646,7 @@ def persist_instagram_insight(
         entity_id=entity_id,
         period=period,
         metrics_json=json.dumps(metrics),
-        fetched_at=datetime.now(timezone.utc)
+        fetched_at=now_ist()
     )
     db.add(insight)
     db.commit()
@@ -825,7 +826,7 @@ async def list_instagram_comments(
                             "id": f"comment_{i}",
                             "username": f"instagram_user_{i}",
                             "text": f"This is a test comment {i}",
-                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "timestamp": now_ist().isoformat(),
                             "profile_pic_url": None,
                             "replies": [],
                             "post": {
@@ -836,7 +837,7 @@ async def list_instagram_comments(
                                 "media_url": f"https://picsum.photos/id/{i}/800",
                                 "permalink": f"https://instagram.com/p/mock_{i}",
                                 "caption": f"Test post {i} caption",
-                                "timestamp": (datetime.now(timezone.utc) - timedelta(hours=i)).isoformat()
+                                "timestamp": (now_ist() - timedelta(hours=i)).isoformat()
                             }
                         } for i in range(5)
                     ]
@@ -907,7 +908,7 @@ async def reply_to_instagram_comment(
             reply = {
                 "id": f"reply_{datetime.now().timestamp()}",
                 "text": reply_data["text"],
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": now_ist().isoformat(),
                 "username": account.username
             }
         else:
@@ -949,7 +950,7 @@ async def create_instagram_comment(
         raise HTTPException(status_code=502, detail=error.get("message", "Failed to create comment"))
 
     comment_id = result.get("id") or result.get("comment_id")
-    timestamp_seconds = int(datetime.now(timezone.utc).timestamp())
+    timestamp_seconds = int(now_ist().timestamp())
     author_id = page_id
 
     comment_record = upsert_instagram_comment(
@@ -1017,7 +1018,7 @@ async def hide_instagram_comment(
     if not media_id:
         media_id = existing.media_id if existing else ""
 
-    timestamp_seconds = int(datetime.now(timezone.utc).timestamp())
+    timestamp_seconds = int(now_ist().timestamp())
 
     comment_record = upsert_instagram_comment(
         db=db,
@@ -1071,7 +1072,7 @@ async def delete_instagram_comment(
         error = result.get("error", {"message": "Failed to delete comment"})
         raise HTTPException(status_code=502, detail=error.get("message", "Failed to delete comment"))
 
-    timestamp_seconds = int(datetime.now(timezone.utc).timestamp())
+    timestamp_seconds = int(now_ist().timestamp())
     existing = db.query(InstagramComment).filter(InstagramComment.id == comment_id).first()
     media_id = existing.media_id if existing else ""
 
@@ -1131,7 +1132,7 @@ async def list_instagram_mentions(
         "type": "ig_comment",
         "action": "mentioned",
         "media": mentions.get("data", []),
-        "timestamp": int(datetime.now(timezone.utc).timestamp()),
+        "timestamp": int(now_ist().timestamp()),
     }
     await ws_manager.broadcast_global(payload)
 
@@ -1691,7 +1692,7 @@ async def _handle_instagram_webhook(request: Request, db: Session) -> Dict[str, 
                         profile_data = fetched_profile
                         profile_cache[igsid] = profile_data
 
-                raw_timestamp = messaging_event.get("timestamp") or int(datetime.now(timezone.utc).timestamp() * 1000)
+                raw_timestamp = messaging_event.get("timestamp") or int(now_ist().timestamp() * 1000)
                 timestamp_seconds = int(raw_timestamp / 1000)
                 event_datetime = datetime.fromtimestamp(timestamp_seconds, tz=timezone.utc)
 
@@ -1992,7 +1993,7 @@ async def _handle_instagram_webhook(request: Request, db: Session) -> Dict[str, 
 
                 text = value.get("text") or value.get("message")
                 hidden = bool(value.get("hidden", False))
-                raw_ts = value.get("timestamp") or value.get("created_time") or int(datetime.now(timezone.utc).timestamp() * 1000)
+                raw_ts = value.get("timestamp") or value.get("created_time") or int(now_ist().timestamp() * 1000)
                 if raw_ts > 10**12:
                     timestamp_seconds = int(raw_ts / 1000)
                 else:
@@ -2088,7 +2089,7 @@ async def instagram_dm_send(
 
     graph_message_id = send_result.get("message_id")
     normalized_graph_message_id = graph_message_id[:255] if graph_message_id else None
-    now_utc = datetime.now(timezone.utc)
+    now_utc = now_ist()
     timestamp_seconds = int(now_utc.timestamp())
     attachments_json = json.dumps(payload.attachments) if payload.attachments else None
     message_content = resolve_message_text(payload.text, payload.attachments or []) or ""
@@ -2361,7 +2362,7 @@ async def send_message(chat_id: str, message_data: MessageCreate, current_user: 
         if not msg_timestamp.tzinfo:
             msg_timestamp = msg_timestamp.replace(tzinfo=timezone.utc)
         window_deadline = msg_timestamp + timedelta(hours=24)
-        if datetime.now(timezone.utc) > window_deadline:
+        if now_ist() > window_deadline:
             raise HTTPException(
                 status_code=403,
                 detail="Outside the 24-hour human agent window. Send an approved template instead."
@@ -2374,13 +2375,13 @@ async def send_message(chat_id: str, message_data: MessageCreate, current_user: 
             sender=MessageSender.AGENT,
             content=message_data.content,
             message_type=message_data.message_type,
-            timestamp=datetime.now(timezone.utc),
+            timestamp=now_ist(),
             is_ticklegram=True
         )
         new_message.attachments = []
         db.add(new_message)
         chat.last_message = message_data.content
-        chat.updated_at = datetime.now(timezone.utc)
+        chat.updated_at = now_ist()
         db.commit()
         db.refresh(new_message)
         logger.info(f"Mock message sent in chat {chat_id}")
@@ -2433,7 +2434,7 @@ async def send_message(chat_id: str, message_data: MessageCreate, current_user: 
         sender=MessageSender.AGENT,
         content=message_data.content,
         message_type=message_data.message_type,
-        timestamp=datetime.now(timezone.utc),
+        timestamp=now_ist(),
         is_ticklegram=True
     )
     new_message.attachments = []
@@ -2441,7 +2442,7 @@ async def send_message(chat_id: str, message_data: MessageCreate, current_user: 
     
     # Update chat
     chat.last_message = message_data.content
-    chat.updated_at = datetime.now(timezone.utc)
+    chat.updated_at = now_ist()
     
     db.commit()
     db.refresh(new_message)
@@ -2524,7 +2525,7 @@ def connect_facebook_page(
         existing_page.page_name = page_data.page_name or existing_page.page_name
         existing_page.access_token = page_data.access_token
         existing_page.is_active = True
-        existing_page.updated_at = datetime.now(timezone.utc)
+        existing_page.updated_at = now_ist()
         db.commit()
         db.refresh(existing_page)
         logger.info(f"Updated Facebook page: {page_data.page_id}")
@@ -2584,7 +2585,7 @@ def update_facebook_page(
     if page_update.is_active is not None:
         page.is_active = page_update.is_active
     
-    page.updated_at = datetime.now(timezone.utc)
+    page.updated_at = now_ist()
     db.commit()
     db.refresh(page)
     
@@ -2693,7 +2694,7 @@ def update_template(
         template.meta_template_id = template_data.meta_template_id
         template.is_meta_approved = True  # Auto-approve if valid Meta template ID is provided
     
-    template.updated_at = datetime.now(timezone.utc)
+    template.updated_at = now_ist()
     db.commit()
     db.refresh(template)
     
@@ -2765,7 +2766,7 @@ async def submit_template_to_meta(
         # Update template with submission info
         template.meta_submission_id = result['id']
         template.meta_submission_status = result['status']
-        template.updated_at = datetime.now(timezone.utc)
+        template.updated_at = now_ist()
         
         try:
             db.commit()
@@ -2845,7 +2846,7 @@ async def check_meta_template_status(
             template.is_meta_approved = True
             template.meta_template_id = result.get('template_id')  # Meta may provide a permanent template ID
             
-        template.updated_at = datetime.now(timezone.utc)
+        template.updated_at = now_ist()
         db.commit()
         
         return {
@@ -2903,7 +2904,7 @@ async def send_template(
     """
     if last_customer_message:
         window_deadline = last_customer_message.timestamp + timedelta(hours=24)
-        if datetime.now(timezone.utc) > window_deadline and not template.is_meta_approved:
+        if now_ist() > window_deadline and not template.is_meta_approved:
             raise HTTPException(
                 status_code=403,
                 detail="Outside the 24-hour human agent window. Only Meta-approved templates can be sent."
@@ -2942,13 +2943,13 @@ async def send_template(
             sender=MessageSender.AGENT,
             content=message_content,
             message_type=MessageType.TEXT,
-            timestamp=datetime.now(timezone.utc),
+            timestamp=now_ist(),
             is_ticklegram=True
         )
         new_message.attachments = []
         db.add(new_message)
         chat.last_message = message_content
-        chat.updated_at = datetime.now(timezone.utc)
+        chat.updated_at = now_ist()
         db.commit()
         db.refresh(new_message)
         logger.info(f"Template message sent (mock mode) in chat {chat.id}")
@@ -3011,13 +3012,13 @@ async def send_template(
             sender=MessageSender.AGENT,
             content=message_content,
             message_type=MessageType.TEXT,
-            timestamp=datetime.now(timezone.utc),
+            timestamp=now_ist(),
             is_ticklegram=True
         )
         new_message.attachments = []
         db.add(new_message)
         chat.last_message = message_content
-        chat.updated_at = datetime.now(timezone.utc)
+        chat.updated_at = now_ist()
         db.commit()
         db.refresh(new_message)
     
@@ -3134,7 +3135,7 @@ async def handle_facebook_webhook(request: Request, db: Session = Depends(get_db
                             db.flush()
                         else:
                             facebook_user.last_message = processed.get("text", "") or facebook_user.last_message
-                            facebook_user.last_seen_at = datetime.now(timezone.utc)
+                            facebook_user.last_seen_at = now_ist()
                             if profile_name:
                                 facebook_user.name = profile_name
                             if computed_username:
@@ -3167,7 +3168,7 @@ async def handle_facebook_webhook(request: Request, db: Session = Depends(get_db
                             sender=MessageSender.FACEBOOK_USER,
                             content=processed.get("text", ""),
                             message_type=MessageType.TEXT,
-                            timestamp=datetime.now(timezone.utc),
+                            timestamp=now_ist(),
                             is_ticklegram=False
                         )
                         new_message.attachments = []
@@ -3176,7 +3177,7 @@ async def handle_facebook_webhook(request: Request, db: Session = Depends(get_db
                         # Update chat
                         chat.last_message = processed.get("text", "")
                         chat.unread_count += 1
-                        chat.updated_at = datetime.now(timezone.utc)
+                        chat.updated_at = now_ist()
                         
                         db.commit()
                         db.refresh(new_message)
@@ -3249,7 +3250,7 @@ def simulate_incoming_message(chat_id: str, message: str, current_user: User = D
         sender=MessageSender.INSTAGRAM_USER if chat.platform == MessagePlatform.INSTAGRAM else MessageSender.FACEBOOK_USER,
         content=message,
         message_type=MessageType.TEXT,
-        timestamp=datetime.now(timezone.utc),
+        timestamp=now_ist(),
         is_ticklegram=False
     )
     new_message.attachments = []
@@ -3257,7 +3258,7 @@ def simulate_incoming_message(chat_id: str, message: str, current_user: User = D
     
     chat.last_message = message
     chat.unread_count += 1
-    chat.updated_at = datetime.now(timezone.utc)
+    chat.updated_at = now_ist()
     
     db.commit()
     db.refresh(new_message)
