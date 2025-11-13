@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import axios from 'axios';
 import { useWebSocketContext } from '../context/WebSocketContext';
 import { useChatContext, ChatProvider } from '../context/ChatContext';
@@ -15,8 +15,11 @@ import InstagramAccountManager from '../components/InstagramAccountManager';
 import TemplateManager from '../components/TemplateManager';
 import { Button } from '../components/ui/button';
 import { Sheet, SheetContent } from '../components/ui/sheet';
-import { Settings, Instagram } from 'lucide-react';
+import { Settings, Instagram, Shield } from 'lucide-react';
 import { useIsMobile } from '../hooks/useMediaQuery';
+import PositionManager from '../components/PositionManager';
+import UserRosterModal from '../components/UserRosterModal';
+import { hasPermission, hasAnyPermission } from '../utils/permissionUtils';
 
 const DashboardContent = ({ user, onLogout }) => {
   const { ws, lastMessage } = useWebSocketContext();
@@ -36,10 +39,40 @@ const DashboardContent = ({ user, onLogout }) => {
   const [selectedPlatform, setSelectedPlatform] = useState('all');
   const [showFacebookManager, setShowFacebookManager] = useState(false);
   const [showInstagramManager, setShowInstagramManager] = useState(false);
+  const [userRoster, setUserRoster] = useState([]);
+  const [userRosterLoading, setUserRosterLoading] = useState(false);
+  const [rosterPositions, setRosterPositions] = useState([]);
+  const [rosterPositionsLoading, setRosterPositionsLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [showPositionManager, setShowPositionManager] = useState(false);
+  const [showUserRosterModal, setShowUserRosterModal] = useState(false);
   const isMobile = useIsMobile();
+  const canManageIntegrations = useMemo(() => hasPermission(user, 'integration:manage'), [user]);
+  const canManageTemplates = useMemo(() => hasPermission(user, 'template:manage'), [user]);
+  const canManagePositions = useMemo(() => hasPermission(user, 'position:manage'), [user]);
+  const canAssignChats = useMemo(() => hasPermission(user, 'chat:assign'), [user]);
+  const canLoadAgentDirectory = useMemo(
+    () => hasPermission(user, 'chat:assign') || hasPermission(user, 'position:assign'),
+    [user]
+  );
+  const canViewUserRoster = useMemo(
+    () => hasAnyPermission(user, ['position:assign', 'position:manage', 'chat:assign']),
+    [user]
+  );
+  const canAssignPositions = useMemo(() => hasPermission(user, 'position:assign'), [user]);
+  const assignableAgents = useMemo(
+    () =>
+      agents.filter((agent) => {
+        const slug = agent.position?.slug;
+        if (!slug) {
+          return true;
+        }
+        return slug === 'agent-messaging';
+      }),
+    [agents]
+  );
 
   // Handle WebSocket messages
   useEffect(() => {
@@ -61,7 +94,29 @@ const DashboardContent = ({ user, onLogout }) => {
       }
     };
     loadInitialData();
-  }, []);
+  }, [canLoadAgentDirectory, canViewUserRoster]);
+
+  const loadUserRoster = useCallback(async () => {
+    if (!canViewUserRoster) {
+      return;
+    }
+    setUserRosterLoading(true);
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        throw new Error('No authentication token found');
+      }
+      const response = await axios.get(`${API}/users/roster`, {
+        headers: { Authorization: `Bearer ${token}` },
+        timeout: 30000
+      });
+      setUserRoster(response.data || []);
+    } catch (error) {
+      console.error('Error loading user roster:', error);
+    } finally {
+      setUserRosterLoading(false);
+    }
+  }, [canViewUserRoster]);
 
   const loadData = async (platform = selectedPlatform) => {
     setLoading(true);
@@ -82,13 +137,15 @@ const DashboardContent = ({ user, onLogout }) => {
       // Get stats and agents data
       const [statsRes, agentsRes] = await Promise.all([
         axios.get(`${API}/dashboard/stats`, axiosConfig),
-        (user.role === 'admin')
+        canLoadAgentDirectory
           ? axios.get(`${API}/users/agents`, axiosConfig)
           : Promise.resolve({ data: [] })
       ]);
 
       setStats(statsRes.data);
       setAgents(agentsRes.data);
+
+      await loadUserRoster();
 
       // Load chats using the context
       await loadChats(platform);
@@ -103,6 +160,29 @@ const DashboardContent = ({ user, onLogout }) => {
       setLoading(false);
     }
   };
+
+  const loadRosterPositions = useCallback(async () => {
+    if (!canAssignPositions) {
+      setRosterPositions([]);
+      return;
+    }
+    setRosterPositionsLoading(true);
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        throw new Error('No authentication token found');
+      }
+      const response = await axios.get(`${API}/positions`, {
+        headers: { Authorization: `Bearer ${token}` },
+        timeout: 30000
+      });
+      setRosterPositions(response.data || []);
+    } catch (error) {
+      console.error('Error loading positions:', error);
+    } finally {
+      setRosterPositionsLoading(false);
+    }
+  }, [canAssignPositions]);
 
   const handlePlatformChange = async (platform) => {
     setSelectedPlatform(platform);
@@ -152,6 +232,40 @@ const DashboardContent = ({ user, onLogout }) => {
     }
   };
 
+  const handleAssignPosition = async (userId, positionId) => {
+    if (!canAssignPositions) {
+      return;
+    }
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        throw new Error('No authentication token found');
+      }
+      await axios.post(
+        `${API}/users/${userId}/position`,
+        { position_id: positionId },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      await loadUserRoster();
+    } catch (error) {
+      console.error('Error assigning position:', error);
+    }
+  };
+
+  useEffect(() => {
+    if (showUserRosterModal && canAssignPositions) {
+      loadRosterPositions();
+    }
+  }, [showUserRosterModal, canAssignPositions, loadRosterPositions]);
+
+  useEffect(() => {
+    if (canViewUserRoster) {
+      loadUserRoster();
+    } else {
+      setUserRoster([]);
+    }
+  }, [canViewUserRoster, loadUserRoster]);
+
   // Only show initial loading screen, not on subsequent updates
   if (loading && !stats) {
     return (
@@ -190,7 +304,7 @@ const DashboardContent = ({ user, onLogout }) => {
       
       <div className="p-3 space-y-3">
         <StatsCards stats={stats} />
-        
+
         <Tabs defaultValue="chats" className="w-full">
           <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
             <div className="flex flex-wrap items-center gap-2">
@@ -211,7 +325,7 @@ const DashboardContent = ({ user, onLogout }) => {
                 >
                   Comments
                 </TabsTrigger>
-                {user.role === 'admin' && (
+                {canManageTemplates && (
                   <TabsTrigger
                     value="templates"
                     className="tg-tab-trigger px-4 py-1.5 text-sm"
@@ -222,26 +336,49 @@ const DashboardContent = ({ user, onLogout }) => {
               </TabsList>
             </div>
 
-            {user.role === 'admin' && (
+            {(canManageIntegrations || canManagePositions || canViewUserRoster) && (
               <div className="flex items-center space-x-2">
-                <Button
-                  onClick={() => setShowInstagramManager(true)}
-                  variant="ghost"
-                  className="manage-btn manage-btn--ig"
-                  data-testid="manage-instagram-accounts-button"
-                >
-                  <Instagram className="w-4 h-4 mr-2" />
-                  Manage Instagram
-                </Button>
-                <Button
-                  onClick={() => setShowFacebookManager(true)}
-                  variant="ghost"
-                  className="manage-btn manage-btn--fb"
-                  data-testid="manage-facebook-pages-button"
-                >
-                  <Settings className="w-4 h-4 mr-2" />
-                  Manage Facebook
-                </Button>
+                {canViewUserRoster && (
+                  <Button
+                    onClick={() => setShowUserRosterModal(true)}
+                    variant="ghost"
+                    className="manage-btn manage-btn--roles"
+                  >
+                    User Directory
+                  </Button>
+                )}
+                {canManageIntegrations && (
+                  <>
+                    <Button
+                      onClick={() => setShowInstagramManager(true)}
+                      variant="ghost"
+                      className="manage-btn manage-btn--ig"
+                      data-testid="manage-instagram-accounts-button"
+                    >
+                      <Instagram className="w-4 h-4 mr-2" />
+                      Manage Instagram
+                    </Button>
+                    <Button
+                      onClick={() => setShowFacebookManager(true)}
+                      variant="ghost"
+                      className="manage-btn manage-btn--fb"
+                      data-testid="manage-facebook-pages-button"
+                    >
+                      <Settings className="w-4 h-4 mr-2" />
+                      Manage Facebook
+                    </Button>
+                  </>
+                )}
+                {canManagePositions && (
+                  <Button
+                    onClick={() => setShowPositionManager(true)}
+                    variant="ghost"
+                    className="manage-btn manage-btn--roles"
+                  >
+                    <Shield className="w-4 h-4 mr-2" />
+                    Manage Positions
+                  </Button>
+                )}
               </div>
             )}
           </div>
@@ -277,8 +414,9 @@ const DashboardContent = ({ user, onLogout }) => {
                     chat={selectedChat}
                     onSendMessage={handleSendMessage}
                     onAssignChat={handleAssignChat}
-                    agents={agents}
+                    agents={assignableAgents}
                     userRole={user.role}
+                    canAssignChats={canAssignChats}
                   />
                 </div>
               </div>
@@ -301,8 +439,9 @@ const DashboardContent = ({ user, onLogout }) => {
                     chat={selectedChat}
                     onSendMessage={handleSendMessage}
                     onAssignChat={handleAssignChat}
-                    agents={agents}
+                    agents={assignableAgents}
                     userRole={user.role}
+                    canAssignChats={canAssignChats}
                   />
                 </div>
               </div>
@@ -315,7 +454,7 @@ const DashboardContent = ({ user, onLogout }) => {
             </div>
           </TabsContent>
 
-          {user.role === 'admin' && (
+          {canManageTemplates && (
             <TabsContent value="templates">
               <div className="h-[calc(100vh-380px)] overflow-y-auto">
                 <TemplateManager />
@@ -333,6 +472,26 @@ const DashboardContent = ({ user, onLogout }) => {
       {/* Facebook Page Manager Modal */}
       {showFacebookManager && (
         <FacebookPageManager onClose={() => setShowFacebookManager(false)} />
+      )}
+
+      <PositionManager open={showPositionManager} onClose={() => setShowPositionManager(false)} />
+      {canViewUserRoster && (
+        <UserRosterModal
+          open={showUserRosterModal}
+          onClose={() => setShowUserRosterModal(false)}
+          users={userRoster}
+          loading={userRosterLoading}
+          currentUserId={user.id}
+          positions={rosterPositions}
+          positionsLoading={rosterPositionsLoading}
+          canManagePositions={canManagePositions}
+          canAssignPositions={canAssignPositions}
+          onManagePositions={() => {
+            setShowUserRosterModal(false);
+            setShowPositionManager(true);
+          }}
+          onAssignPosition={handleAssignPosition}
+        />
       )}
     </div>
   );

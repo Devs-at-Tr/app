@@ -21,12 +21,46 @@ def convert_to_ist(dt: datetime) -> datetime:
     ist = pytz.timezone('Asia/Kolkata')
     return dt.astimezone(ist)
 
+# Position Schemas
+class PositionBase(BaseModel):
+    name: str
+    slug: str
+    description: Optional[str] = None
+    permissions: List[str] = Field(default_factory=list)
+
+class PositionCreate(PositionBase):
+    is_system: bool = False
+
+class PositionUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    permissions: Optional[List[str]] = None
+
+class PositionResponse(BaseModel):
+    id: str
+    name: str
+    slug: str
+    description: Optional[str] = None
+    permissions: List[str] = Field(default_factory=list)
+    is_system: bool
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+    def model_post_init(self, _):
+        self.created_at = convert_to_ist(self.created_at)
+        self.updated_at = convert_to_ist(self.updated_at)
+
+
 # Auth Schemas
 class UserRegister(BaseModel):
     name: str
     email: EmailStr
     password: str
     role: Optional[UserRole] = UserRole.AGENT
+    position_id: Optional[str] = None
 
 class UserLogin(BaseModel):
     email: EmailStr
@@ -37,6 +71,8 @@ class UserResponse(BaseModel):
     name: str
     email: str
     role: UserRole
+    position: Optional[PositionResponse] = None
+    permissions: List[str] = Field(default_factory=list)
     created_at: datetime
     
     class Config:
@@ -49,6 +85,13 @@ class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserResponse
+
+class UserPositionUpdate(BaseModel):
+    position_id: Optional[str] = None
+
+
+class UserRosterEntry(UserResponse):
+    assigned_chat_count: int = 0
 
 # Instagram Schemas
 class InstagramConnect(BaseModel):
@@ -83,6 +126,7 @@ class MessageResponse(BaseModel):
     attachments_json: Optional[str] = Field(default=None, exclude=True)
     metadata_json: Optional[str] = Field(default=None, exclude=True)
     is_gif: Optional[bool] = Field(default=False, exclude=True)
+    sent_by: Optional[Dict[str, Any]] = None
     
     class Config:
         from_attributes = True
@@ -98,6 +142,12 @@ class MessageResponse(BaseModel):
                     self.attachments = []
             else:
                 self.attachments = []
+        if self.metadata_json and not self.sent_by:
+            try:
+                metadata = json.loads(self.metadata_json)
+                self.sent_by = metadata.get("sent_by")
+            except (TypeError, ValueError):
+                self.sent_by = None
 
 class InstagramUserSchema(BaseModel):
     igsid: str

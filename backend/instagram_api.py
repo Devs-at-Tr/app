@@ -7,7 +7,7 @@ from typing import Dict, Any, Optional, List
 from datetime import datetime, timezone, timedelta
 from enum import Enum
 import asyncio
-from utils.timezone import now_ist
+from utils.timezone import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -369,7 +369,7 @@ class InstagramClient:
             "has_attachments": len(attachments) > 0,
             "attachments": attachments,
             "is_story_reply": is_story_reply,
-            "timestamp": now_ist(),
+            "timestamp": utc_now(),
             "sender_name": sender_name,
             "sender_username": sender_username
         }
@@ -490,7 +490,7 @@ class InstagramClient:
                     "id": f"comment_{i}",
                     "username": f"instagram_user_{i}",
                     "text": f"This is a test comment {i}",
-                    "timestamp": now_ist().isoformat(),
+                    "timestamp": utc_now().isoformat(),
                     "profile_pic": None,
                     "replies": [],
                     "post": {
@@ -501,7 +501,7 @@ class InstagramClient:
                         "media_url": f"https://picsum.photos/id/{i}/800",
                         "permalink": f"https://instagram.com/p/mock_{i}",
                         "caption": f"Test post {i} caption",
-                        "timestamp": (now_ist() - timedelta(hours=i)).isoformat()
+                        "timestamp": (utc_now() - timedelta(hours=i)).isoformat()
                     }
                 } for i in range(5)
             ]
@@ -607,7 +607,7 @@ class InstagramClient:
             return {
                 "id": f"reply_{datetime.now().timestamp()}",
                 "text": message,
-                "timestamp": now_ist().isoformat(),
+                "timestamp": utc_now().isoformat(),
                 "username": "mock_account"
             }
         
@@ -628,7 +628,7 @@ class InstagramClient:
             return {
                 "id": reply_data["id"],
                 "text": message,
-                "timestamp": now_ist().isoformat(),
+                "timestamp": utc_now().isoformat(),
                 "username": "Your Account"  # You might want to get this from the account info
             }
         
@@ -767,7 +767,7 @@ class InstagramClient:
                         "id": f"mention_{datetime.now().timestamp()}",
                         "media_type": "IMAGE",
                         "media_url": "https://picsum.photos/seed/mention/800",
-                        "timestamp": now_ist().isoformat()
+                        "timestamp": utc_now().isoformat()
                     }
                 ],
                 "mode": "mock"
@@ -804,7 +804,7 @@ class InstagramClient:
                     {
                         "name": metric,
                         "period": period,
-                        "values": [{"value": 1234, "end_time": now_ist().isoformat()}]
+                        "values": [{"value": 1234, "end_time": utc_now().isoformat()}]
                     }
                     for metric in metrics.split(",")
                 ],
@@ -841,7 +841,7 @@ class InstagramClient:
                 "data": [
                     {
                         "name": metric,
-                        "values": [{"value": 456, "end_time": now_ist().isoformat()}]
+                        "values": [{"value": 456, "end_time": utc_now().isoformat()}]
                     }
                     for metric in metrics.split(",")
                 ],
@@ -877,7 +877,7 @@ class InstagramClient:
                 "data": [
                     {
                         "name": metric,
-                        "values": [{"value": 78, "end_time": now_ist().isoformat()}]
+                        "values": [{"value": 78, "end_time": utc_now().isoformat()}]
                     }
                     for metric in metrics.split(",")
                 ],

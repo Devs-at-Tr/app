@@ -1,6 +1,11 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useChatContext } from '../context/ChatContext';
-import { formatMessageTime, formatMessageDate } from '../utils/dateUtils';
+import {
+  formatMessageTime,
+  formatMessageDate,
+  formatMessageDay,
+  formatMessageFullDateTime
+} from '../utils/dateUtils';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
@@ -38,7 +43,7 @@ const FacebookIcon = ({ className }) => (
   </svg>
 );
 
-const ChatWindow = ({ agents, userRole, onAssignChat }) => {
+const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false }) => {
   const { selectedChat: chat, sendMessage } = useChatContext();
   const isMobile = useIsMobile(); // Must be at top level before any conditional logic
   const [message, setMessage] = useState('');
@@ -69,6 +74,51 @@ const ChatWindow = ({ agents, userRole, onAssignChat }) => {
 
   useEffect(() => {
     scrollToBottom();
+  }, [chat?.messages]);
+
+  const orderedMessages = useMemo(() => {
+    if (!chat?.messages) {
+      return [];
+    }
+    const seenIds = new Set();
+    return [...chat.messages]
+      .filter((msg) => {
+        if (!msg?.id) {
+          return true;
+        }
+        if (seenIds.has(msg.id)) {
+          return false;
+        }
+        seenIds.add(msg.id);
+        return true;
+      })
+      .sort((a, b) => {
+        const tsA = (() => {
+          if (a?.timestamp) {
+            const value = new Date(a.timestamp).getTime();
+            if (!Number.isNaN(value)) {
+              return value;
+            }
+          }
+          if (typeof a?.ts === 'number') {
+            return a.ts * 1000;
+          }
+          return 0;
+        })();
+        const tsB = (() => {
+          if (b?.timestamp) {
+            const value = new Date(b.timestamp).getTime();
+            if (!Number.isNaN(value)) {
+              return value;
+            }
+          }
+          if (typeof b?.ts === 'number') {
+            return b.ts * 1000;
+          }
+          return 0;
+        })();
+        return tsA - tsB;
+      });
   }, [chat?.messages]);
 
   const scrollToBottom = () => {
@@ -331,7 +381,7 @@ const ChatWindow = ({ agents, userRole, onAssignChat }) => {
             </div>
           </div>
 
-          {userRole === 'admin' && (
+          {canAssignChats && (
             <div className="flex items-center space-x-2">
               <Select
                 value={chat.assigned_to || 'unassigned'}
@@ -361,15 +411,17 @@ const ChatWindow = ({ agents, userRole, onAssignChat }) => {
 
         {/* Messages */}
         <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4 chat-scroll" data-testid="messages-container">
-          {chat.messages && chat.messages.length === 0 ? (
+          {orderedMessages.length === 0 ? (
             <div className="text-center text-gray-500 mt-8">No messages yet</div>
           ) : (
-            chat.messages?.map((msg) => {
-              const senderType = (msg.sender || '').toString().toLowerCase();
-              const isInstagramPage = senderType === 'instagram_page';
-              const isAgentMessage = senderType === 'agent' || isInstagramPage;
-              const isTicklegramMessage = Boolean(msg.is_ticklegram);
-              const showAsTicklegram = isTicklegramMessage && isAgentMessage;
+            (() => {
+              let lastRenderedDay = null;
+              return orderedMessages.map((msg, index) => {
+                const senderType = (msg.sender || '').toString().toLowerCase();
+                const isInstagramPage = senderType === 'instagram_page';
+                const isAgentMessage = senderType === 'agent' || isInstagramPage;
+                const isTicklegramMessage = Boolean(msg.is_ticklegram);
+                const showAsTicklegram = isTicklegramMessage && isAgentMessage;
               const bubbleClasses = showAsTicklegram
                 ? 'bubble-agent'
                 : isInstagramPage
@@ -377,92 +429,108 @@ const ChatWindow = ({ agents, userRole, onAssignChat }) => {
                   : isAgentMessage
                     ? 'bubble-agent'
                     : 'bubble-user';
-              const originLabel = showAsTicklegram
-                ? 'Sent from Ticklegram'
-                : isInstagramPage
-                  ? 'Sent from Instagram app'
-                  : '';
-              const attachments = Array.isArray(msg.attachments) ? msg.attachments : [];
-              const hasAttachments = attachments.length > 0;
-              const placeholderText = (msg.content || '').trim().toLowerCase();
-              const hideText = hasAttachments && (placeholderText === '[attachment]' || placeholderText === '');
-              const displayText = hideText ? '' : msg.content;
-
-              const resolveAttachmentUrl = (attachment) => {
-                const source =
-                  attachment?.public_url ||
-                  attachment?.payload?.url ||
-                  attachment?.url ||
-                  '';
-                if (!source) {
-                  return null;
+                const sentByName = msg.sent_by?.name || msg.sent_by?.email;
+                let originLabel = '';
+                if (showAsTicklegram) {
+                  originLabel = `Sent from Ticklegram${sentByName ? ` · ${sentByName}` : ''}`;
+                } else if (isInstagramPage) {
+                  originLabel = 'Sent from Instagram app';
+                } else if (sentByName) {
+                  originLabel = `Sent by ${sentByName}`;
                 }
-                if (source.startsWith('http')) {
-                  return source;
+                const attachments = Array.isArray(msg.attachments) ? msg.attachments : [];
+                const hasAttachments = attachments.length > 0;
+                const placeholderText = (msg.content || '').trim().toLowerCase();
+                const hideText = hasAttachments && (placeholderText === '[attachment]' || placeholderText === '');
+                const displayText = hideText ? '' : msg.content;
+                const dayLabel = msg.timestamp ? formatMessageDay(msg.timestamp) : (msg.ts ? formatMessageDay(new Date(msg.ts * 1000).toISOString()) : '');
+                const showDayLabel = dayLabel && dayLabel !== lastRenderedDay;
+                if (showDayLabel) {
+                  lastRenderedDay = dayLabel;
                 }
-                const base = BACKEND_URL || '';
-                return `${base}${source}`;
-              };
 
-              return (
-                <div
-                  key={msg.id}
-                  className={`message-bubble flex ${isAgentMessage ? 'justify-end' : 'justify-start'}`}
-                  data-testid={`message-${msg.id}`}
-                >
-                  <div
-                    className={`max-w-[70%] rounded-2xl px-4 py-3 ${bubbleClasses}`}
-                  >
-                    {displayText && (
-                      <p className="text-sm whitespace-pre-line break-words">{displayText}</p>
-                    )}
-                    {originLabel && (
-                      <p className="text-[11px] text-purple-200/80 italic mt-1">
-                        {originLabel}
-                      </p>
-                    )}
-                    {attachments.length > 0 && (
-                      <div className="mt-3 space-y-2">
-                        {attachments.map((attachment, index) => {
-                          const attachmentUrl = resolveAttachmentUrl(attachment);
-                          if (attachment.type === 'image' && attachmentUrl) {
-                            return (
-                              <img
-                                key={`image-${msg.id}-${index}`}
-                                src={attachmentUrl}
-                                alt={`attachment-${index + 1}`}
-                                className="max-h-64 w-full rounded-xl object-cover border border-white/10"
-                              />
-                            );
-                          }
-                          if (!attachmentUrl) {
-                            return null;
-                          }
-                          return (
-                            <a
-                              key={`file-${msg.id}-${index}`}
-                              href={attachmentUrl}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="block text-xs text-purple-200 underline break-all"
-                            >
-                              View attachment
-                            </a>
-                          );
-                        })}
+                const resolveAttachmentUrl = (attachment) => {
+                  const source =
+                    attachment?.public_url ||
+                    attachment?.payload?.url ||
+                    attachment?.url ||
+                    '';
+                  if (!source) {
+                    return null;
+                  }
+                  if (source.startsWith('http')) {
+                    return source;
+                  }
+                  const base = BACKEND_URL || '';
+                  return `${base}${source}`;
+                };
+
+                return (
+                  <React.Fragment key={msg.id || `${index}-${msg.timestamp || 'message'}`}>
+                    {showDayLabel && (
+                      <div className="text-center text-[11px] uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                        {dayLabel}
                       </div>
                     )}
-                    <p
-                      className={`text-xs mt-1 ${
-                        isAgentMessage ? 'text-purple-200' : 'text-gray-500'
-                      }`}
+                    <div
+                      className={`message-bubble flex ${isAgentMessage ? 'justify-end' : 'justify-start'}`}
+                      data-testid={`message-${msg.id}`}
                     >
-                      {formatMessageTime(msg.timestamp)}
-                    </p>
-                  </div>
-                </div>
-              );
-            })
+                      <div
+                        className={`max-w-[70%] rounded-2xl px-4 py-3 ${bubbleClasses}`}
+                      >
+                        {displayText && (
+                          <p className="text-sm whitespace-pre-line break-words">{displayText}</p>
+                        )}
+                        {originLabel && (
+                          <p className="text-[11px] text-purple-200/80 italic mt-1">
+                            {originLabel}
+                          </p>
+                        )}
+                        {attachments.length > 0 && (
+                          <div className="mt-3 space-y-2">
+                            {attachments.map((attachment, index) => {
+                              const attachmentUrl = resolveAttachmentUrl(attachment);
+                              if (attachment.type === 'image' && attachmentUrl) {
+                                return (
+                                  <img
+                                    key={`image-${msg.id}-${index}`}
+                                    src={attachmentUrl}
+                                    alt={`attachment-${index + 1}`}
+                                    className="max-h-64 w-full rounded-xl object-cover border border-white/10"
+                                  />
+                                );
+                              }
+                              if (!attachmentUrl) {
+                                return null;
+                              }
+                              return (
+                                <a
+                                  key={`file-${msg.id}-${index}`}
+                                  href={attachmentUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="block text-xs text-purple-200 underline break-all"
+                                >
+                                  View attachment
+                                </a>
+                              );
+                            })}
+                          </div>
+                        )}
+                        <p
+                          className={`text-[11px] mt-2 ${
+                            isAgentMessage ? 'text-purple-200' : 'text-gray-500'
+                          }`}
+                        >
+                          {formatMessageFullDateTime(msg.timestamp || (msg.ts ? new Date(msg.ts * 1000).toISOString() : null))}
+                        </p>
+                      </div>
+                    </div>
+                  </React.Fragment>
+                );
+              });
+            })()
           )}
           <div ref={messagesEndRef} />
         </div>

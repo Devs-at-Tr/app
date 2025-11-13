@@ -4,12 +4,8 @@ from database import Base
 from datetime import datetime, timezone
 import uuid
 import enum
-from utils.timezone import now_ist
-
-
-def utc_now():
-    """Return current Asia/Kolkata time (backwards-compatible helper)."""
-    return now_ist()
+import json
+from utils.timezone import utc_now
 
 class UserRole(str, enum.Enum):
     ADMIN = "admin"
@@ -48,6 +44,39 @@ class InstagramCommentAction(str, enum.Enum):
     UPDATED = "updated"
     DELETED = "deleted"
 
+class Position(Base):
+    __tablename__ = "positions"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    name = Column(String(255), nullable=False)
+    slug = Column(String(255), nullable=False, unique=True, index=True)
+    description = Column(Text, nullable=True)
+    permissions_json = Column(Text, nullable=False, default="[]")
+    is_system = Column(Boolean, default=False)
+    created_at = Column(DateTime(timezone=True), default=utc_now)
+    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+    users = relationship("User", back_populates="position")
+
+    @property
+    def permissions(self):
+        try:
+            data = json.loads(self.permissions_json or "[]")
+        except (TypeError, ValueError):
+            data = []
+        if not isinstance(data, list):
+            return []
+        return data
+
+    @permissions.setter
+    def permissions(self, value):
+        if value is None:
+            value = []
+        if not isinstance(value, (list, tuple, set)):
+            raise ValueError("permissions must be a collection")
+        normalized = sorted({str(item).strip() for item in value if str(item).strip()})
+        self.permissions_json = json.dumps(normalized)
+
 class User(Base):
     __tablename__ = "users"
     
@@ -56,11 +85,13 @@ class User(Base):
     email = Column(String(255), unique=True, nullable=False, index=True)
     password_hash = Column(String(255), nullable=False)
     role = Column(SQLEnum(UserRole), nullable=False, default=UserRole.AGENT)
-    created_at = Column(DateTime(timezone=True), default=now_ist)
-    updated_at = Column(DateTime(timezone=True), default=now_ist, onupdate=now_ist)
+    position_id = Column(String(36), ForeignKey("positions.id"), nullable=True, index=True)
+    created_at = Column(DateTime(timezone=True), default=utc_now)
+    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
     
     instagram_accounts = relationship("InstagramAccount", back_populates="user", cascade="all, delete-orphan")
     assigned_chats = relationship("Chat", back_populates="assigned_agent", foreign_keys="Chat.assigned_to")
+    position = relationship("Position", back_populates="users")
 
 class InstagramAccount(Base):
     __tablename__ = "instagram_accounts"
@@ -70,7 +101,7 @@ class InstagramAccount(Base):
     page_id = Column(String(255), nullable=False)
     access_token = Column(String(500), nullable=False)
     username = Column(String(255), nullable=True)
-    connected_at = Column(DateTime(timezone=True), default=now_ist)
+    connected_at = Column(DateTime(timezone=True), default=utc_now)
     
     user = relationship("User", back_populates="instagram_accounts")
 
@@ -88,8 +119,8 @@ class Chat(Base):
     unread_count = Column(Integer, default=0)
     platform = Column(SQLEnum(MessagePlatform), nullable=False, default=MessagePlatform.INSTAGRAM, index=True)
     facebook_page_id = Column(String(255), nullable=True)
-    created_at = Column(DateTime(timezone=True), default=now_ist)
-    updated_at = Column(DateTime(timezone=True), default=now_ist, onupdate=now_ist)
+    created_at = Column(DateTime(timezone=True), default=utc_now)
+    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
     
     instagram_chat_messages = relationship(
         "InstagramMessage",

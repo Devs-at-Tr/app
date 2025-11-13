@@ -41,3 +41,23 @@ export const formatMessageDate = (timestamp) => {
     return '';
   }
 };
+
+export const formatMessageDay = (timestamp) => {
+  if (!timestamp) return '';
+  try {
+    return formatInTimeZone(new Date(timestamp), TIMEZONE, 'EEEE, MMM d, yyyy');
+  } catch (e) {
+    console.error('Error formatting day:', e);
+    return '';
+  }
+};
+
+export const formatMessageFullDateTime = (timestamp) => {
+  if (!timestamp) return '';
+  try {
+    return formatInTimeZone(new Date(timestamp), TIMEZONE, 'MMM d, yyyy · h:mm a');
+  } catch (e) {
+    console.error('Error formatting full datetime:', e);
+    return '';
+  }
+};

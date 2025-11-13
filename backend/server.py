@@ -3,6 +3,7 @@ from starlette.websockets import WebSocketState
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from typing import List, Optional, Set, Dict, Any, Tuple, Type, Union
 from websocket_manager import manager as ws_manager
@@ -18,11 +19,12 @@ from urllib.parse import urlparse
 import re
 import requests
 import hashlib
-from database import engine, get_db, Base
-from utils.timezone import now_ist
+from database import engine, get_db, Base, SessionLocal
+from utils.timezone import utc_now
 from migrations.runner import run_all_migrations as ensure_instagram_profile_schema
 from models import (
     User,
+    Position,
     InstagramAccount,
     Chat,
     UserRole,
@@ -61,11 +63,29 @@ from schemas import (
     InstagramMarketingEventRequest,
     InstagramMarketingEventSchema,
     InstagramCommentSchema,
-    InstagramInsightSchema
+    InstagramInsightSchema,
+    PositionCreate,
+    PositionUpdate,
+    PositionResponse,
+    UserPositionUpdate,
+    UserRosterEntry
 )
 from auth import verify_password, get_password_hash, create_access_token, decode_access_token
 from facebook_api import facebook_client, FacebookMode
 from instagram_api import instagram_client, InstagramMode
+from permissions import (
+    PermissionCode,
+    ensure_default_positions,
+    ensure_admin_position_assignments,
+    get_default_position,
+    user_has_permissions,
+    user_has_any_permission,
+    annotate_user_with_permissions,
+    validate_permissions_payload,
+    get_permission_definitions,
+    is_super_admin_user,
+    DEFAULT_POSITION_SLUGS
+)
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -78,6 +98,7 @@ ATTACHMENT_DOWNLOAD_TIMEOUT = int(os.getenv("ATTACHMENT_DOWNLOAD_TIMEOUT", "20")
 INSTAGRAM_MESSAGE_ID_MAX_LENGTH = 512
 
 INSTAGRAM_PAGE_ID = os.getenv("INSTAGRAM_PAGE_ID") or os.getenv("PAGE_ID") or os.getenv("FACEBOOK_PAGE_ID")
+FACEBOOK_APP_ID = os.getenv("FACEBOOK_APP_ID") or os.getenv("META_APP_ID")
 INSTAGRAM_PAGE_ACCESS_TOKEN = os.getenv("INSTAGRAM_PAGE_ACCESS_TOKEN") or os.getenv("PAGE_ACCESS_TOKEN") or os.getenv("FACEBOOK_PAGE_ACCESS_TOKEN")
 INSTAGRAM_VERIFY_TOKEN = os.getenv("VERIFY_TOKEN") or os.getenv("INSTAGRAM_WEBHOOK_VERIFY_TOKEN") or os.getenv("FACEBOOK_WEBHOOK_VERIFY_TOKEN")
 
@@ -145,6 +166,14 @@ except Exception as migration_exc:
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
+
+# Ensure default positions exist for role assignment workflows
+try:
+    with SessionLocal() as bootstrap_session:
+        ensure_default_positions(bootstrap_session)
+        ensure_admin_position_assignments(bootstrap_session)
+except Exception as exc:
+    logging.getLogger(__name__).warning("Default position bootstrap skipped: %s", exc)
 
 # Create the main app
 app = FastAPI(
@@ -248,6 +277,143 @@ def prepare_instagram_attachments(
             entry["public_url"] = source_url
         prepared.append(entry)
     return prepared
+
+
+def _normalize_slug(value: str) -> str:
+    if not value:
+        raise HTTPException(status_code=400, detail="Slug is required")
+    slug = re.sub(r"[^a-z0-9]+", "-", value.strip().lower()).strip("-")
+    if not slug:
+        raise HTTPException(status_code=400, detail="Slug must include alphanumeric characters")
+    return slug
+
+
+def _ensure_user_role(user: User) -> User:
+    if not user:
+        return user
+    role = getattr(user, "role", None)
+    if isinstance(role, UserRole):
+        return user
+    if isinstance(role, str):
+        normalized = role.strip().lower()
+        if normalized in UserRole._value2member_map_:
+            user.role = UserRole(normalized)
+            return user
+    user.role = UserRole.AGENT
+    return user
+
+
+def _resolve_position_for_user(
+    db: Session,
+    role: Optional[UserRole],
+    position_id: Optional[str],
+) -> Optional[Position]:
+    if position_id:
+        position = db.query(Position).filter(Position.id == position_id).first()
+        if not position:
+            raise HTTPException(status_code=404, detail="Position not found")
+        return position
+    role = role or UserRole.AGENT
+    return get_default_position(db, role)
+
+
+def _annotate_user(user: User) -> User:
+    if not user:
+        return user
+    _ensure_user_role(user)
+    annotate_user_with_permissions(user)
+    return user
+
+
+_CHAT_VIEW_ALL_PERMISSIONS = [
+    PermissionCode.CHAT_VIEW_ALL.value,
+    PermissionCode.CHAT_VIEW_TEAM.value,
+]
+
+
+def _user_can_view_all_chats(user: User) -> bool:
+    if not user:
+        return False
+    if user.role == UserRole.ADMIN:
+        return True
+    return user_has_any_permission(user, _CHAT_VIEW_ALL_PERMISSIONS)
+
+
+def _assert_chat_access(user: User, chat: Chat) -> None:
+    if not user or not chat:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+    if _user_can_view_all_chats(user):
+        return
+    if chat.assigned_to == user.id:
+        return
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+
+def _serialize_user_light(user: Optional[User]) -> Optional[Dict[str, str]]:
+    if not user:
+        return None
+    return {
+        "id": user.id,
+        "name": user.name,
+        "email": user.email,
+    }
+
+
+def _merge_message_metadata(existing_json: Optional[str], sent_by: Optional[User] = None) -> Optional[str]:
+    payload: Dict[str, Any] = {}
+    if existing_json:
+        try:
+            payload = json.loads(existing_json)
+        except (ValueError, TypeError):
+            payload = {}
+    if sent_by:
+        info = _serialize_user_light(sent_by)
+        if info:
+            payload["sent_by"] = info
+    return json.dumps(payload) if payload else None
+
+
+def _is_assignable_agent(user: Optional[User]) -> bool:
+    if not user or user.role != UserRole.AGENT:
+        return False
+    position = getattr(user, "position", None)
+    if position and position.slug != DEFAULT_POSITION_SLUGS["agent"]:
+        return False
+    return True
+
+
+def require_permissions(*permission_codes: PermissionCode):
+    required_values = [
+        code.value if isinstance(code, PermissionCode) else str(code)
+        for code in permission_codes
+    ]
+
+    async def dependency(current_user: User = Depends(get_current_user)) -> User:
+        if user_has_permissions(current_user, required_values):
+            return current_user
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient permissions"
+        )
+
+    return dependency
+
+
+def require_any_permissions(*permission_codes: PermissionCode):
+    required_values = [
+        code.value if isinstance(code, PermissionCode) else str(code)
+        for code in permission_codes
+    ]
+
+    async def dependency(current_user: User = Depends(get_current_user)) -> User:
+        if user_has_any_permission(current_user, required_values):
+            return current_user
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient permissions"
+        )
+
+    return dependency
 
 def resolve_instagram_access_token(db: Session, page_id: Optional[str]) -> Optional[str]:
     """Resolve the best access token for an Instagram page."""
@@ -441,7 +607,7 @@ def hydrate_instagram_chat_messages(chat: Optional[Chat], instagram_msgs: List[I
     def _ts(msg: InstagramChatMessage) -> datetime:
         if msg.timestamp:
             return msg.timestamp if msg.timestamp.tzinfo else msg.timestamp.replace(tzinfo=timezone.utc)
-        return now_ist()
+        return utc_now()
 
     chat.messages.sort(key=_ts)
 
@@ -646,7 +812,7 @@ def persist_instagram_insight(
         entity_id=entity_id,
         period=period,
         metrics_json=json.dumps(metrics),
-        fetched_at=now_ist()
+        fetched_at=utc_now()
     )
     db.add(insight)
     db.commit()
@@ -693,7 +859,7 @@ async def get_current_user(authorization: Optional[str] = Header(None), db: Sess
             detail="User not found"
         )
     
-    return user
+    return _annotate_user(user)
 
 # Dependency for admin only
 async def get_admin_user(current_user: User = Depends(get_current_user)) -> User:
@@ -728,12 +894,15 @@ def register(user_data: UserRegister, db: Session = Depends(get_db)):
         password_hash=get_password_hash(user_data.password),
         role=user_data.role
     )
+    position = _resolve_position_for_user(db, user_data.role, user_data.position_id)
+    if position:
+        new_user.position_id = position.id
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
     
     logger.info(f"User registered: {new_user.email}")
-    return new_user
+    return _annotate_user(new_user)
 
 @api_router.post("/auth/signup", response_model=UserResponse)
 def signup(
@@ -746,10 +915,7 @@ def signup(
         raise HTTPException(status_code=400, detail="Email already registered")
 
     # Only allow agent role for public signup
-    if user_data.role not in ['agent', None]:
-        role = 'agent'
-    else:
-        role = user_data.role or 'agent'
+    role = UserRole.AGENT
 
     new_user = User(
         name=user_data.name,
@@ -757,12 +923,15 @@ def signup(
         password_hash=get_password_hash(user_data.password),
         role=role
     )
+    position = _resolve_position_for_user(db, role, None)
+    if position:
+        new_user.position_id = position.id
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
 
     logger.info(f"New agent registered: {new_user.email}")
-    return new_user
+    return _annotate_user(new_user)
 
 @api_router.post("/auth/login", response_model=TokenResponse)
 def login(credentials: UserLogin, db: Session = Depends(get_db)):
@@ -775,6 +944,7 @@ def login(credentials: UserLogin, db: Session = Depends(get_db)):
         )
     
     access_token = create_access_token(data={"user_id": user.id, "email": user.email})
+    user = _annotate_user(user)
     
     logger.info(f"User logged in: {user.email}")
     return TokenResponse(
@@ -790,13 +960,173 @@ def get_me(current_user: User = Depends(get_current_user)):
 
 @api_router.get("/users", response_model=List[UserResponse])
 def list_users(current_user: User = Depends(get_admin_user), db: Session = Depends(get_db)):
-    users = db.query(User).all()
-    return users
+    users = db.query(User).options(joinedload(User.position)).all()
+    return [_annotate_user(user) for user in users]
 
 @api_router.get("/users/agents", response_model=List[UserResponse])
 def list_agents(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    agents = db.query(User).filter(User.role == UserRole.AGENT).all()
-    return agents
+    agents = (
+        db.query(User)
+        .options(joinedload(User.position))
+        .filter(User.role == UserRole.AGENT)
+        .all()
+    )
+    assignable = [agent for agent in agents if _is_assignable_agent(agent)]
+    return [_annotate_user(agent) for agent in assignable]
+
+
+@api_router.get("/users/roster", response_model=List[UserRosterEntry])
+def user_roster(
+    current_user: User = Depends(require_any_permissions(PermissionCode.POSITION_ASSIGN, PermissionCode.POSITION_MANAGE, PermissionCode.CHAT_ASSIGN)),
+    db: Session = Depends(get_db)
+):
+    viewer_is_super_admin = is_super_admin_user(current_user)
+    counts = {
+        row[0]: row[1]
+        for row in (
+            db.query(Chat.assigned_to, func.count(Chat.id))
+            .filter(Chat.assigned_to.isnot(None))
+            .group_by(Chat.assigned_to)
+            .all()
+        )
+        if row[0]
+    }
+    users = db.query(User).options(joinedload(User.position)).all()
+    roster: List[UserRosterEntry] = []
+    for user in users:
+        annotated = _annotate_user(user)
+        user_payload = UserResponse.model_validate(annotated).model_dump()
+        if not viewer_is_super_admin:
+            position_payload = user_payload.get("position")
+            if position_payload and position_payload.get("slug") == DEFAULT_POSITION_SLUGS["super_admin"]:
+                # Hide the explicit super-admin label from non super-admin viewers
+                user_payload["position"] = None
+        user_payload["assigned_chat_count"] = int(counts.get(user.id, 0) or 0)
+        roster.append(UserRosterEntry.model_validate(user_payload))
+    return roster
+
+
+# ============= POSITION MANAGEMENT ENDPOINTS =============
+
+@api_router.get("/positions", response_model=List[PositionResponse])
+def list_positions(
+    current_user: User = Depends(require_any_permissions(
+        PermissionCode.POSITION_MANAGE,
+        PermissionCode.POSITION_ASSIGN
+    )),
+    db: Session = Depends(get_db)
+):
+    query = db.query(Position).order_by(Position.created_at.asc())
+    if not is_super_admin_user(current_user):
+        query = query.filter(Position.slug != DEFAULT_POSITION_SLUGS["super_admin"])
+    positions = query.all()
+    return positions
+
+
+@api_router.post("/positions", response_model=PositionResponse)
+def create_position(
+    position_data: PositionCreate,
+    current_user: User = Depends(require_permissions(PermissionCode.POSITION_MANAGE)),
+    db: Session = Depends(get_db)
+):
+    slug = _normalize_slug(position_data.slug or position_data.name)
+    if slug == DEFAULT_POSITION_SLUGS["super_admin"] and not is_super_admin_user(current_user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only Super Admins can create this position")
+    existing = db.query(Position).filter(Position.slug == slug).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Position slug already exists")
+    position = Position(
+        name=position_data.name.strip(),
+        slug=slug,
+        description=position_data.description,
+        is_system=position_data.is_system,
+    )
+    position.permissions = validate_permissions_payload(position_data.permissions)
+    db.add(position)
+    db.commit()
+    db.refresh(position)
+    return position
+
+
+@api_router.put("/positions/{position_id}", response_model=PositionResponse)
+def update_position(
+    position_id: str,
+    position_data: PositionUpdate,
+    current_user: User = Depends(require_permissions(PermissionCode.POSITION_MANAGE)),
+    db: Session = Depends(get_db)
+):
+    position = db.query(Position).filter(Position.id == position_id).first()
+    if not position:
+        raise HTTPException(status_code=404, detail="Position not found")
+    if position.slug == DEFAULT_POSITION_SLUGS["super_admin"] and not is_super_admin_user(current_user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only Super Admins can edit this position")
+    if position_data.name:
+        position.name = position_data.name.strip()
+    if position_data.description is not None:
+        position.description = position_data.description
+    if position_data.permissions is not None:
+        position.permissions = validate_permissions_payload(position_data.permissions)
+    db.commit()
+    db.refresh(position)
+    return position
+
+
+@api_router.delete("/positions/{position_id}")
+def delete_position(
+    position_id: str,
+    current_user: User = Depends(require_permissions(PermissionCode.POSITION_MANAGE)),
+    db: Session = Depends(get_db)
+):
+    position = db.query(Position).filter(Position.id == position_id).first()
+    if not position:
+        raise HTTPException(status_code=404, detail="Position not found")
+    if position.is_system:
+        raise HTTPException(status_code=400, detail="System positions cannot be deleted")
+    in_use = db.query(User).filter(User.position_id == position_id).count()
+    if in_use:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot delete a position that is currently assigned to users"
+        )
+    db.delete(position)
+    db.commit()
+    return {"success": True, "position_id": position_id}
+
+
+@api_router.post("/users/{user_id}/position", response_model=UserResponse)
+def assign_position_to_user(
+    user_id: str,
+    payload: UserPositionUpdate,
+    current_user: User = Depends(require_permissions(PermissionCode.POSITION_ASSIGN)),
+    db: Session = Depends(get_db)
+):
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if user.id == current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You cannot change your own position"
+        )
+    if payload.position_id:
+        position = db.query(Position).filter(Position.id == payload.position_id).first()
+        if not position:
+            raise HTTPException(status_code=404, detail="Position not found")
+        if position.slug == DEFAULT_POSITION_SLUGS["super_admin"] and not is_super_admin_user(current_user):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only Super Admins can assign this position")
+        user.position_id = position.id
+    else:
+        user.position_id = None
+    db.commit()
+    db.refresh(user)
+    return _annotate_user(user)
+
+
+@api_router.get("/permissions/codes")
+def list_permission_codes_endpoint(
+    current_user: User = Depends(require_permissions(PermissionCode.POSITION_MANAGE))
+):
+    return get_permission_definitions()
 
 # ============= INSTAGRAM ENDPOINTS =============
 
@@ -826,7 +1156,7 @@ async def list_instagram_comments(
                             "id": f"comment_{i}",
                             "username": f"instagram_user_{i}",
                             "text": f"This is a test comment {i}",
-                            "timestamp": now_ist().isoformat(),
+                            "timestamp": utc_now().isoformat(),
                             "profile_pic_url": None,
                             "replies": [],
                             "post": {
@@ -837,7 +1167,7 @@ async def list_instagram_comments(
                                 "media_url": f"https://picsum.photos/id/{i}/800",
                                 "permalink": f"https://instagram.com/p/mock_{i}",
                                 "caption": f"Test post {i} caption",
-                                "timestamp": (now_ist() - timedelta(hours=i)).isoformat()
+                                "timestamp": (utc_now() - timedelta(hours=i)).isoformat()
                             }
                         } for i in range(5)
                     ]
@@ -908,7 +1238,7 @@ async def reply_to_instagram_comment(
             reply = {
                 "id": f"reply_{datetime.now().timestamp()}",
                 "text": reply_data["text"],
-                "timestamp": now_ist().isoformat(),
+                "timestamp": utc_now().isoformat(),
                 "username": account.username
             }
         else:
@@ -950,7 +1280,7 @@ async def create_instagram_comment(
         raise HTTPException(status_code=502, detail=error.get("message", "Failed to create comment"))
 
     comment_id = result.get("id") or result.get("comment_id")
-    timestamp_seconds = int(now_ist().timestamp())
+    timestamp_seconds = int(utc_now().timestamp())
     author_id = page_id
 
     comment_record = upsert_instagram_comment(
@@ -1018,7 +1348,7 @@ async def hide_instagram_comment(
     if not media_id:
         media_id = existing.media_id if existing else ""
 
-    timestamp_seconds = int(now_ist().timestamp())
+    timestamp_seconds = int(utc_now().timestamp())
 
     comment_record = upsert_instagram_comment(
         db=db,
@@ -1072,7 +1402,7 @@ async def delete_instagram_comment(
         error = result.get("error", {"message": "Failed to delete comment"})
         raise HTTPException(status_code=502, detail=error.get("message", "Failed to delete comment"))
 
-    timestamp_seconds = int(now_ist().timestamp())
+    timestamp_seconds = int(utc_now().timestamp())
     existing = db.query(InstagramComment).filter(InstagramComment.id == comment_id).first()
     media_id = existing.media_id if existing else ""
 
@@ -1132,7 +1462,7 @@ async def list_instagram_mentions(
         "type": "ig_comment",
         "action": "mentioned",
         "media": mentions.get("data", []),
-        "timestamp": int(now_ist().timestamp()),
+        "timestamp": int(utc_now().timestamp()),
     }
     await ws_manager.broadcast_global(payload)
 
@@ -1655,6 +1985,7 @@ async def _handle_instagram_webhook(request: Request, db: Session) -> Dict[str, 
                     continue
 
                 is_echo = message_data.get("is_echo", False)
+                event_app_id = str(message_data.get("app_id") or messaging_event.get("app_id") or "")
                 direction = InstagramMessageDirection.OUTBOUND if is_echo or sender_id == instagram_account_id else InstagramMessageDirection.INBOUND
                 igsid = sender_id if direction == InstagramMessageDirection.INBOUND else recipient_id
 
@@ -1692,7 +2023,9 @@ async def _handle_instagram_webhook(request: Request, db: Session) -> Dict[str, 
                         profile_data = fetched_profile
                         profile_cache[igsid] = profile_data
 
-                raw_timestamp = messaging_event.get("timestamp") or int(now_ist().timestamp() * 1000)
+                raw_timestamp = messaging_event.get("timestamp")
+                if not raw_timestamp:
+                    raw_timestamp = utc_now().timestamp() * 1000
                 timestamp_seconds = int(raw_timestamp / 1000)
                 event_datetime = datetime.fromtimestamp(timestamp_seconds, tz=timezone.utc)
 
@@ -1735,7 +2068,17 @@ async def _handle_instagram_webhook(request: Request, db: Session) -> Dict[str, 
                 except (TypeError, ValueError):
                     raw_message_json = None
 
-                is_ticklegram_event = bool(is_echo or direction == InstagramMessageDirection.OUTBOUND)
+                is_ticklegram_event = False
+                if is_echo and FACEBOOK_APP_ID:
+                    is_ticklegram_event = event_app_id == str(FACEBOOK_APP_ID)
+
+                if direction == InstagramMessageDirection.OUTBOUND and is_ticklegram_event:
+                    logger.debug(
+                        "Skipping outbound echo from TickleGram app for message %s (igsid=%s)",
+                        message_id,
+                        igsid
+                    )
+                    continue
 
                 ig_message = InstagramMessageLog(
                     igsid=igsid,
@@ -1901,7 +2244,7 @@ async def _handle_instagram_webhook(request: Request, db: Session) -> Dict[str, 
                             content=outbound_preview,
                             message_type=inferred_type,
                             timestamp=event_datetime,
-                            is_ticklegram=True,
+                            is_ticklegram=is_ticklegram_event,
                             attachments_json=_dump_attachments_json(attachments)
                         )
                         new_message.attachments = attachments
@@ -1993,7 +2336,7 @@ async def _handle_instagram_webhook(request: Request, db: Session) -> Dict[str, 
 
                 text = value.get("text") or value.get("message")
                 hidden = bool(value.get("hidden", False))
-                raw_ts = value.get("timestamp") or value.get("created_time") or int(now_ist().timestamp() * 1000)
+                raw_ts = value.get("timestamp") or value.get("created_time") or int(utc_now().timestamp() * 1000)
                 if raw_ts > 10**12:
                     timestamp_seconds = int(raw_ts / 1000)
                 else:
@@ -2089,7 +2432,7 @@ async def instagram_dm_send(
 
     graph_message_id = send_result.get("message_id")
     normalized_graph_message_id = graph_message_id[:255] if graph_message_id else None
-    now_utc = now_ist()
+    now_utc = utc_now()
     timestamp_seconds = int(now_utc.timestamp())
     attachments_json = json.dumps(payload.attachments) if payload.attachments else None
     message_content = resolve_message_text(payload.text, payload.attachments or []) or ""
@@ -2169,7 +2512,8 @@ async def instagram_dm_send(
         message_type=MessageType.TEXT,
         timestamp=now_utc,
         is_ticklegram=True,
-        attachments_json=attachments_json
+        attachments_json=attachments_json,
+        metadata_json=_merge_message_metadata(None, sent_by=current_user)
     )
     message_record.attachments = payload.attachments or []
     db.add(message_record)
@@ -2249,8 +2593,8 @@ def list_chats(
         elif platform.upper() == "FACEBOOK":
             query = query.filter(Chat.platform == MessagePlatform.FACEBOOK)
     
-    # Filter by assigned to current user (for agents)
-    if assigned_to_me or current_user.role == UserRole.AGENT:
+    # Filter by assigned to current user (for agents without wider visibility)
+    if assigned_to_me or not _user_can_view_all_chats(current_user):
         query = query.filter(Chat.assigned_to == current_user.id)
     
     chats = query.order_by(Chat.updated_at.desc()).all()
@@ -2274,9 +2618,7 @@ def get_chat(chat_id: str, current_user: User = Depends(get_current_user), db: S
     if not chat:
         raise HTTPException(status_code=404, detail="Chat not found")
     
-    # Check access: agents can only see their assigned chats
-    if current_user.role == UserRole.AGENT and chat.assigned_to != current_user.id:
-        raise HTTPException(status_code=403, detail="Access denied")
+    _assert_chat_access(current_user, chat)
     
     # Mark messages as read by resetting unread count
     chat.unread_count = 0
@@ -2295,14 +2637,24 @@ def get_chat(chat_id: str, current_user: User = Depends(get_current_user), db: S
     return chat
 
 @api_router.post("/chats/{chat_id}/assign")
-def assign_chat(chat_id: str, assignment: ChatAssign, current_user: User = Depends(get_admin_user), db: Session = Depends(get_db)):
+def assign_chat(
+    chat_id: str,
+    assignment: ChatAssign,
+    current_user: User = Depends(require_permissions(PermissionCode.CHAT_ASSIGN)),
+    db: Session = Depends(get_db)
+):
     chat = db.query(Chat).filter(Chat.id == chat_id).first()
     if not chat:
         raise HTTPException(status_code=404, detail="Chat not found")
     
     if assignment.agent_id:
-        agent = db.query(User).filter(User.id == assignment.agent_id, User.role == UserRole.AGENT).first()
-        if not agent:
+        agent = (
+            db.query(User)
+            .options(joinedload(User.position))
+            .filter(User.id == assignment.agent_id, User.role == UserRole.AGENT)
+            .first()
+        )
+        if not agent or not _is_assignable_agent(agent):
             raise HTTPException(status_code=404, detail="Agent not found")
         chat.assigned_to = assignment.agent_id
         chat.status = ChatStatus.ASSIGNED
@@ -2323,9 +2675,7 @@ def mark_chat_as_read(chat_id: str, current_user: User = Depends(get_current_use
     if not chat:
         raise HTTPException(status_code=404, detail="Chat not found")
     
-    # Check access - agents can only mark their assigned chats, admins can mark any
-    if current_user.role == UserRole.AGENT and chat.assigned_to != current_user.id:
-        raise HTTPException(status_code=403, detail="Access denied")
+    _assert_chat_access(current_user, chat)
     
     # Reset unread count
     chat.unread_count = 0
@@ -2340,9 +2690,7 @@ async def send_message(chat_id: str, message_data: MessageCreate, current_user: 
     if not chat:
         raise HTTPException(status_code=404, detail="Chat not found")
     
-    # Check access
-    if current_user.role == UserRole.AGENT and chat.assigned_to != current_user.id:
-        raise HTTPException(status_code=403, detail="Access denied")
+    _assert_chat_access(current_user, chat)
     
     # Enforce Meta's 24-hour human agent policy
     message_model = _message_model_for_platform(chat.platform)
@@ -2362,7 +2710,7 @@ async def send_message(chat_id: str, message_data: MessageCreate, current_user: 
         if not msg_timestamp.tzinfo:
             msg_timestamp = msg_timestamp.replace(tzinfo=timezone.utc)
         window_deadline = msg_timestamp + timedelta(hours=24)
-        if now_ist() > window_deadline:
+        if utc_now() > window_deadline:
             raise HTTPException(
                 status_code=403,
                 detail="Outside the 24-hour human agent window. Send an approved template instead."
@@ -2375,13 +2723,14 @@ async def send_message(chat_id: str, message_data: MessageCreate, current_user: 
             sender=MessageSender.AGENT,
             content=message_data.content,
             message_type=message_data.message_type,
-            timestamp=now_ist(),
-            is_ticklegram=True
+            timestamp=utc_now(),
+            is_ticklegram=True,
+            metadata_json=_merge_message_metadata(None, sent_by=current_user)
         )
         new_message.attachments = []
         db.add(new_message)
         chat.last_message = message_data.content
-        chat.updated_at = now_ist()
+        chat.updated_at = utc_now()
         db.commit()
         db.refresh(new_message)
         logger.info(f"Mock message sent in chat {chat_id}")
@@ -2434,15 +2783,16 @@ async def send_message(chat_id: str, message_data: MessageCreate, current_user: 
         sender=MessageSender.AGENT,
         content=message_data.content,
         message_type=message_data.message_type,
-        timestamp=now_ist(),
-        is_ticklegram=True
+        timestamp=utc_now(),
+        is_ticklegram=True,
+        metadata_json=_merge_message_metadata(None, sent_by=current_user)
     )
     new_message.attachments = []
     db.add(new_message)
     
     # Update chat
     chat.last_message = message_data.content
-    chat.updated_at = now_ist()
+    chat.updated_at = utc_now()
     
     db.commit()
     db.refresh(new_message)
@@ -2525,7 +2875,7 @@ def connect_facebook_page(
         existing_page.page_name = page_data.page_name or existing_page.page_name
         existing_page.access_token = page_data.access_token
         existing_page.is_active = True
-        existing_page.updated_at = now_ist()
+        existing_page.updated_at = utc_now()
         db.commit()
         db.refresh(existing_page)
         logger.info(f"Updated Facebook page: {page_data.page_id}")
@@ -2585,7 +2935,7 @@ def update_facebook_page(
     if page_update.is_active is not None:
         page.is_active = page_update.is_active
     
-    page.updated_at = now_ist()
+    page.updated_at = utc_now()
     db.commit()
     db.refresh(page)
     
@@ -2694,7 +3044,7 @@ def update_template(
         template.meta_template_id = template_data.meta_template_id
         template.is_meta_approved = True  # Auto-approve if valid Meta template ID is provided
     
-    template.updated_at = now_ist()
+    template.updated_at = utc_now()
     db.commit()
     db.refresh(template)
     
@@ -2766,7 +3116,7 @@ async def submit_template_to_meta(
         # Update template with submission info
         template.meta_submission_id = result['id']
         template.meta_submission_status = result['status']
-        template.updated_at = now_ist()
+        template.updated_at = utc_now()
         
         try:
             db.commit()
@@ -2846,7 +3196,7 @@ async def check_meta_template_status(
             template.is_meta_approved = True
             template.meta_template_id = result.get('template_id')  # Meta may provide a permanent template ID
             
-        template.updated_at = now_ist()
+        template.updated_at = utc_now()
         db.commit()
         
         return {
@@ -2879,9 +3229,7 @@ async def send_template(
     if not chat:
         raise HTTPException(status_code=404, detail="Chat not found")
     
-    # Check access
-    if current_user.role == UserRole.AGENT and chat.assigned_to != current_user.id:
-        raise HTTPException(status_code=403, detail="Access denied")
+    _assert_chat_access(current_user, chat)
     
     # Check platform match
     if template.platform != chat.platform:
@@ -2904,7 +3252,7 @@ async def send_template(
     """
     if last_customer_message:
         window_deadline = last_customer_message.timestamp + timedelta(hours=24)
-        if now_ist() > window_deadline and not template.is_meta_approved:
+        if utc_now() > window_deadline and not template.is_meta_approved:
             raise HTTPException(
                 status_code=403,
                 detail="Outside the 24-hour human agent window. Only Meta-approved templates can be sent."
@@ -2943,13 +3291,14 @@ async def send_template(
             sender=MessageSender.AGENT,
             content=message_content,
             message_type=MessageType.TEXT,
-            timestamp=now_ist(),
-            is_ticklegram=True
+            timestamp=utc_now(),
+            is_ticklegram=True,
+            metadata_json=_merge_message_metadata(None, sent_by=current_user)
         )
         new_message.attachments = []
         db.add(new_message)
         chat.last_message = message_content
-        chat.updated_at = now_ist()
+        chat.updated_at = utc_now()
         db.commit()
         db.refresh(new_message)
         logger.info(f"Template message sent (mock mode) in chat {chat.id}")
@@ -3012,13 +3361,14 @@ async def send_template(
             sender=MessageSender.AGENT,
             content=message_content,
             message_type=MessageType.TEXT,
-            timestamp=now_ist(),
-            is_ticklegram=True
+            timestamp=utc_now(),
+            is_ticklegram=True,
+            metadata_json=_merge_message_metadata(None, sent_by=current_user)
         )
         new_message.attachments = []
         db.add(new_message)
         chat.last_message = message_content
-        chat.updated_at = now_ist()
+        chat.updated_at = utc_now()
         db.commit()
         db.refresh(new_message)
     
@@ -3135,7 +3485,7 @@ async def handle_facebook_webhook(request: Request, db: Session = Depends(get_db
                             db.flush()
                         else:
                             facebook_user.last_message = processed.get("text", "") or facebook_user.last_message
-                            facebook_user.last_seen_at = now_ist()
+                            facebook_user.last_seen_at = utc_now()
                             if profile_name:
                                 facebook_user.name = profile_name
                             if computed_username:
@@ -3168,7 +3518,7 @@ async def handle_facebook_webhook(request: Request, db: Session = Depends(get_db
                             sender=MessageSender.FACEBOOK_USER,
                             content=processed.get("text", ""),
                             message_type=MessageType.TEXT,
-                            timestamp=now_ist(),
+                            timestamp=utc_now(),
                             is_ticklegram=False
                         )
                         new_message.attachments = []
@@ -3177,7 +3527,7 @@ async def handle_facebook_webhook(request: Request, db: Session = Depends(get_db
                         # Update chat
                         chat.last_message = processed.get("text", "")
                         chat.unread_count += 1
-                        chat.updated_at = now_ist()
+                        chat.updated_at = utc_now()
                         
                         db.commit()
                         db.refresh(new_message)
@@ -3250,7 +3600,7 @@ def simulate_incoming_message(chat_id: str, message: str, current_user: User = D
         sender=MessageSender.INSTAGRAM_USER if chat.platform == MessagePlatform.INSTAGRAM else MessageSender.FACEBOOK_USER,
         content=message,
         message_type=MessageType.TEXT,
-        timestamp=now_ist(),
+        timestamp=utc_now(),
         is_ticklegram=False
     )
     new_message.attachments = []
@@ -3258,7 +3608,7 @@ def simulate_incoming_message(chat_id: str, message: str, current_user: User = D
     
     chat.last_message = message
     chat.unread_count += 1
-    chat.updated_at = now_ist()
+    chat.updated_at = utc_now()
     
     db.commit()
     db.refresh(new_message)
@@ -3350,4 +3700,3 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-

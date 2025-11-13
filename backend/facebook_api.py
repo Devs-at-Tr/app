@@ -5,7 +5,7 @@ import logging
 import os
 from typing import Dict, Any, Optional, List
 from datetime import datetime, timezone
-from utils.timezone import now_ist
+from utils.timezone import utc_now
 from enum import Enum
 
 logger = logging.getLogger(__name__)
@@ -553,7 +553,7 @@ class FacebookMessengerClient:
             "text": message_text,
             "has_attachments": len(attachments) > 0,
             "attachments": attachments,
-            "timestamp": now_ist()
+            "timestamp": utc_now()
         }
     
     async def get_user_profile(
