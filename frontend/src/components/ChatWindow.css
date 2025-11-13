@@ -42,24 +42,28 @@
   cursor: pointer;
   transition: all 0.2s ease;
   background-color: transparent;
+  border-left: 3px solid transparent;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+  position: relative;
 }
 
 .chat-item:hover {
-  background-color: rgba(139, 92, 246, 0.1);
+  background-color: var(--tg-chat-hover);
 }
 
 .chat-item.active {
-  background-color: rgba(139, 92, 246, 0.2);
-  border-left: 3px solid #8b5cf6;
+  background-color: var(--tg-chat-active);
+  border-left-color: var(--tg-accent-strong);
+  box-shadow: inset 0 0 0 1px rgba(79, 125, 246, 0.15);
 }
 
 .chat-item.has-unread {
-  background-color: rgba(139, 92, 246, 0.05);
-  border-left: 3px solid #a78bfa;
+  background-color: var(--tg-accent-soft);
+  border-left-color: var(--tg-accent-strong);
 }
 
 .chat-item.has-unread:hover {
-  background-color: rgba(139, 92, 246, 0.15);
+  background-color: rgba(79, 125, 246, 0.15);
 }
 
 /* Notification Badge Animation */

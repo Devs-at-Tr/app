@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useChatContext } from '../context/ChatContext';
+import { cn } from '../lib/utils';
 import {
   formatMessageTime,
   formatMessageDate,
@@ -8,6 +9,7 @@ import {
 } from '../utils/dateUtils';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
+import { Textarea } from './ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { 
   Dialog,
@@ -71,6 +73,30 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false }) 
     }
     return null;
   }, [chat, chatHandle]);
+
+  const assignedAgentName = useMemo(() => {
+    if (!chat) {
+      return null;
+    }
+    return (
+      chat.assigned_agent?.name ||
+      chat.assigned_agent?.email ||
+      chat.assigned_to_name ||
+      chat.assigned_to ||
+      null
+    );
+  }, [chat]);
+
+  const lastActivityLabel = useMemo(() => {
+    if (!chat) {
+      return '';
+    }
+    const timestamp = chat.last_message_timestamp || chat.updated_at || chat.created_at;
+    if (!timestamp) {
+      return '';
+    }
+    return formatMessageFullDateTime(timestamp);
+  }, [chat]);
 
   useEffect(() => {
     scrollToBottom();
@@ -315,33 +341,32 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false }) 
 
   if (!chat) {
     return (
-      <div className="bg-[#1a1a2e] border border-gray-800 rounded-xl h-full w-full flex items-center justify-center" data-testid="no-chat-selected">
-        <div className="text-center">
-          <MessageSquareIcon className="w-16 h-16 text-gray-600 mx-auto mb-4" />
-          <p className="text-gray-400 text-lg">Select a chat to start messaging</p>
+      <div className="conversation-panel h-full w-full flex items-center justify-center" data-testid="no-chat-selected">
+        <div className="text-center space-y-2">
+          <MessageSquareIcon className="w-16 h-16 text-gray-600 mx-auto" />
+          <p className="text-[var(--tg-text-secondary)] text-lg">Select a chat to start messaging</p>
         </div>
       </div>
     );
   }
-  console.log('Rendering ChatWindow for chat:', chat);
   return (
     <div
-      className={`bg-[#1a1a2e] border border-gray-800 h-full w-full min-h-0 flex ${isMobile ? 'flex-col' : 'rounded-xl'}`}
+      className={`flex h-full min-h-0 relative w-full ${isMobile ? 'flex-col space-y-4' : ''}`}
       data-testid="chat-window"
     >
-      <div className={`flex-1 flex flex-col min-h-0 ${!isMobile && isProfileOpen ? 'md:border-r md:border-gray-800' : ''}`}>
+      <div className="conversation-panel flex-1 relative w-full">
         {/* Chat Header */}
-        <div className="p-4 border-b border-gray-800 flex items-center justify-between">
-          <div className="flex items-center space-x-3">
+        <div className="conversation-header">
+          <div className="flex items-center gap-3 flex-1 min-w-0">
             {chatAvatarUrl ? (
               <img
                 src={chatAvatarUrl}
                 alt={chatDisplayName}
-                className="w-10 h-10 rounded-full object-cover border border-gray-700"
+                className="w-12 h-12 rounded-full object-cover border border-gray-700"
               />
             ) : (
               <div
-                className={`w-10 h-10 rounded-full flex items-center justify-center ${
+                className={`w-12 h-12 rounded-full flex items-center justify-center ${
                   chat.platform === 'FACEBOOK'
                     ? 'bg-gradient-to-br from-blue-600 to-blue-700'
                     : 'bg-gradient-to-br from-purple-600 to-pink-600'
@@ -354,41 +379,51 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false }) 
                 )}
               </div>
             )}
-            <div>
-              <div className="flex items-center space-x-2">
+            <div className="space-y-1 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
                 <button
                   type="button"
                   onClick={handleProfileToggle}
-                  className="text-white font-bold hover:text-purple-300 transition-colors focus:outline-none focus:ring-2 focus:ring-purple-500/50 rounded px-1 -mx-1"
+                  className="text-lg font-semibold text-white hover:text-[var(--tg-accent-strong)] transition-colors"
                   data-testid="chat-username"
                   title="View profile info"
                 >
                   {chatDisplayName}
                 </button>
-                <span
-                  className={`px-2 py-0.5 text-xs rounded-full ${
-                    chat.platform === 'FACEBOOK'
-                      ? 'bg-blue-500/20 text-blue-400'
-                      : 'bg-pink-500/20 text-pink-400'
-                  }`}
-                >
-                  {chat.platform === 'FACEBOOK' ? 'Facebook' : 'Instagram'}
+                <span className="assignment-pill inline-flex items-center gap-1">
+                  {chat.platform === 'FACEBOOK' ? (
+                    <FacebookIcon className="w-3.5 h-3.5" />
+                  ) : (
+                    <Instagram className="w-3.5 h-3.5" />
+                  )}
+                  {chat.platform === 'FACEBOOK' ? 'Messenger' : 'Instagram'}
                 </span>
+                {chat.status && (
+                  <span className="assignment-pill">
+                    {chat.status.replace('_', ' ')}
+                  </span>
+                )}
               </div>
-              <p className="text-xs text-gray-400" data-testid="chat-instagram-id">
-                @{chatHandle || 'unknown'}
-              </p>
+              <div className="flex flex-wrap items-center gap-3 text-xs text-[var(--tg-text-muted)]">
+                <span data-testid="chat-instagram-id">@{chatHandle || 'unknown'}</span>
+                {lastActivityLabel && <span>Last activity · {lastActivityLabel}</span>}
+              </div>
             </div>
           </div>
 
-          {canAssignChats && (
-            <div className="flex items-center space-x-2">
+          <div className="flex items-center gap-2 flex-wrap justify-end">
+            <span
+              className={`assignment-pill ${assignedAgentName ? '' : 'assignment-pill--unassigned'}`}
+            >
+              {assignedAgentName ? `Assigned to ${assignedAgentName}` : 'Unassigned'}
+            </span>
+            {canAssignChats && (
               <Select
                 value={chat.assigned_to || 'unassigned'}
                 onValueChange={(value) => onAssignChat(chat.id, value === 'unassigned' ? null : value)}
               >
                 <SelectTrigger
-                  className="w-[200px] bg-[#0f0f1a] border-gray-700 text-white"
+                  className="w-full sm:w-[220px] bg-transparent border-gray-700 text-white rounded-full"
                   data-testid="assign-agent-select"
                 >
                   <UserPlus className="w-4 h-4 mr-2" />
@@ -405,12 +440,15 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false }) 
                   ))}
                 </SelectContent>
               </Select>
-            </div>
-          )}
+            )}
+            <Button variant="ghost" size="sm" onClick={handleProfileToggle}>
+              {isProfileOpen ? 'Hide details' : 'View details'}
+            </Button>
+          </div>
         </div>
 
         {/* Messages */}
-        <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4 chat-scroll" data-testid="messages-container">
+        <div className="conversation-body space-y-4 chat-scroll" data-testid="messages-container">
           {orderedMessages.length === 0 ? (
             <div className="text-center text-gray-500 mt-8">No messages yet</div>
           ) : (
@@ -483,7 +521,7 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false }) 
                           <p className="text-sm whitespace-pre-line break-words">{displayText}</p>
                         )}
                         {originLabel && (
-                          <p className="text-[11px] text-purple-200/80 italic mt-1">
+                          <p className="message-origin italic mt-1">
                             {originLabel}
                           </p>
                         )}
@@ -519,8 +557,8 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false }) 
                           </div>
                         )}
                         <p
-                          className={`text-[11px] mt-2 ${
-                            isAgentMessage ? 'text-purple-200' : 'text-gray-500'
+                          className={`message-timestamp mt-2 ${
+                            isAgentMessage ? 'message-timestamp--agent' : ''
                           }`}
                         >
                           {formatMessageFullDateTime(msg.timestamp || (msg.ts ? new Date(msg.ts * 1000).toISOString() : null))}
@@ -536,49 +574,51 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false }) 
         </div>
 
         {/* Message Input */}
-        <div className={`p-3 md:p-4 border-t border-gray-800 ${isMobile ? 'pb-safe' : ''}`}>
+        <div className={`composer-shell ${isMobile ? 'rounded-2xl border border-[var(--tg-border-soft)] pb-safe' : ''}`}>
           {!canSendManualMessage && (
-            <div className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
+            <div className="mb-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
               The 24-hour human agent window has expired. Send an approved template or wait for the user to reply.
             </div>
           )}
-          <form onSubmit={handleSend} className="flex space-x-2">
-            <Button
-              type="button"
-              onClick={() => setShowTemplateDialog(true)}
-              variant="outline"
-              className={`bg-[#0f0f1a] border-gray-700 text-purple-400 hover:text-purple-300 ${
-                isMobile ? 'min-w-[44px] min-h-[44px] p-3' : ''
-              }`}
-              title="Templates (Ctrl+T)"
-            >
-              <FileText className={`${isMobile ? 'w-5 h-5' : 'w-4 h-4'}`} />
-            </Button>
-            <Input
+          <form onSubmit={handleSend} className="space-y-3">
+            <Textarea
               value={message}
               onChange={(e) => setMessage(e.target.value)}
-              className={`flex-1 bg-[#0f0f1a] border-gray-700 text-white placeholder:text-gray-500 ${
-                isMobile ? 'min-h-[44px] text-base' : ''
-              }`}
+              className={`composer-textarea ${isMobile ? 'min-h-[80px]' : 'min-h-[100px]'}`}
               data-testid="message-input"
               disabled={!canSendManualMessage}
               aria-disabled={!canSendManualMessage}
               placeholder={
                 canSendManualMessage
-                  ? 'Type a message...'
+                  ? 'Type a reply, use / for shortcuts...'
                   : '24-hour window expired. Use an approved template.'
               }
             />
-            <Button
-              type="submit"
-              disabled={!message.trim() || isSending || !canSendManualMessage}
-              className={`bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 ${
-                isMobile ? 'min-w-[44px] min-h-[44px] p-3' : ''
-              }`}
-              data-testid="send-message-button"
-            >
-              <Send className={`${isMobile ? 'w-5 h-5' : 'w-4 h-4'}`} />
-            </Button>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="composer-toolbar">
+                <Button
+                  type="button"
+                  onClick={() => setShowTemplateDialog(true)}
+                  variant="ghost"
+                  className={isMobile ? 'min-w-[44px] min-h-[44px]' : ''}
+                  title="Templates (Ctrl+T)"
+                >
+                  <FileText className="w-4 h-4" />
+                  <span className="hidden sm:inline">Templates</span>
+                </Button>
+              </div>
+              <Button
+                type="submit"
+                disabled={!message.trim() || isSending || !canSendManualMessage}
+                className={`rounded-full px-6 py-2 bg-gradient-to-r from-indigo-500 to-blue-500 hover:from-indigo-600 hover:to-blue-600 ${
+                  isMobile ? 'min-h-[44px]' : ''
+                }`}
+                data-testid="send-message-button"
+              >
+                <Send className="w-4 h-4 mr-2" />
+                Send
+              </Button>
+            </div>
           </form>
         </div>
 
@@ -715,16 +755,31 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false }) 
         </Dialog>
       </div>
 
-      {isProfileOpen && (
-        <ChatProfilePanel
-          chat={chat}
-          onClose={handleCloseProfile}
-          isMobile={isMobile}
-          canSendManualMessage={canSendManualMessage}
-          chatDisplayName={chatDisplayName}
-          chatHandle={chatHandle}
-          chatAvatarUrl={chatAvatarUrl}
-        />
+      {!isMobile && isProfileOpen && (
+        <div className="chat-profile-overlay">
+          <ChatProfilePanel
+            chat={chat}
+            onClose={handleCloseProfile}
+            isMobile={false}
+            canSendManualMessage={canSendManualMessage}
+            chatDisplayName={chatDisplayName}
+            chatHandle={chatHandle}
+            chatAvatarUrl={chatAvatarUrl}
+          />
+        </div>
+      )}
+      {isMobile && isProfileOpen && (
+        <div className="mt-4">
+          <ChatProfilePanel
+            chat={chat}
+            onClose={handleCloseProfile}
+            isMobile
+            canSendManualMessage={canSendManualMessage}
+            chatDisplayName={chatDisplayName}
+            chatHandle={chatHandle}
+            chatAvatarUrl={chatAvatarUrl}
+          />
+        </div>
       )}
     </div>
   );
@@ -811,17 +866,18 @@ const ChatProfilePanel = ({
 
   return (
     <aside
-      className={`bg-[#101023] border-t border-gray-800 w-full md:w-[320px] md:max-w-sm md:border-t-0 md:border-l border-gray-800 flex flex-col min-h-0 ${
-        isMobile ? 'rounded-b-xl' : 'rounded-r-xl'
-      }`}
+      className={cn(
+        'chat-panel bg-[var(--tg-surface)] border border-[var(--tg-border-soft)] flex flex-col min-h-0',
+        isMobile ? 'rounded-2xl' : 'h-full'
+      )}
     >
-      <div className="p-4 border-b border-gray-800 flex items-start justify-between">
+      <div className="p-5 border-b border-[var(--tg-border-soft)] flex items-start justify-between">
         <div className="flex items-center gap-3">
           {avatarUrl ? (
             <img
               src={avatarUrl}
               alt={displayName}
-              className="w-10 h-10 rounded-full object-cover border border-gray-700"
+              className="w-10 h-10 rounded-full object-cover border border-[var(--tg-border-soft)]"
             />
           ) : (
             <div className="w-10 h-10 rounded-full bg-gradient-to-br from-purple-600 to-pink-600 flex items-center justify-center font-semibold text-white">
@@ -829,12 +885,12 @@ const ChatProfilePanel = ({
             </div>
           )}
           <div>
-            <p className="text-xs uppercase text-gray-500 tracking-wide">Profile</p>
-            <p className="text-lg font-semibold text-white">{displayName}</p>
-            <p className="text-xs text-gray-400">@{handle || 'unknown'}</p>
+            <p className="text-xs uppercase text-[var(--tg-text-muted)] tracking-wide">Profile</p>
+            <p className="text-lg font-semibold text-[var(--tg-text-primary)]">{displayName}</p>
+            <p className="text-xs text-[var(--tg-text-muted)]">@{handle || 'unknown'}</p>
             <div className="flex flex-wrap gap-2 mt-2">
               <Badge className={statusBadgeClass}>{statusLabel}</Badge>
-              <Badge variant="outline" className="border-gray-700 text-gray-300">
+              <Badge variant="outline" className="border-[var(--tg-border-soft)] text-[var(--tg-text-secondary)]">
                 {platformLabel}
               </Badge>
             </div>
@@ -843,7 +899,7 @@ const ChatProfilePanel = ({
         <button
           type="button"
           onClick={onClose}
-          className="text-gray-500 hover:text-gray-300 transition-colors"
+          className="text-[var(--tg-text-muted)] hover:text-[var(--tg-text-primary)] transition-colors"
           aria-label="Close profile panel"
         >
           <X className="w-4 h-4" />
@@ -852,36 +908,36 @@ const ChatProfilePanel = ({
 
       <div className="flex-1 overflow-y-auto p-4 space-y-6 chat-scroll">
         <div className="space-y-2">
-          <p className="text-xs uppercase text-gray-500 tracking-wide">Assigned Agent</p>
+          <p className="text-xs uppercase text-[var(--tg-text-muted)] tracking-wide">Assigned Agent</p>
           {assignedAgent ? (
             <>
-              <p className="text-sm font-medium text-white">{assignedAgent.name}</p>
-              <p className="text-xs text-gray-400">{assignedAgent.email}</p>
+              <p className="text-sm font-medium text-[var(--tg-text-primary)]">{assignedAgent.name}</p>
+              <p className="text-xs text-[var(--tg-text-muted)]">{assignedAgent.email}</p>
             </>
           ) : (
-            <p className="text-sm text-gray-400">Unassigned</p>
+            <p className="text-sm text-[var(--tg-text-muted)]">Unassigned</p>
           )}
         </div>
 
         <div className="space-y-2">
-          <p className="text-xs uppercase text-gray-500 tracking-wide">Last Message</p>
+          <p className="text-xs uppercase text-[var(--tg-text-muted)] tracking-wide">Last Message</p>
           {lastMessage ? (
-            <div className="bg-[#0a0a17] border border-gray-800 rounded-lg p-3">
-              <p className="text-sm text-gray-300 whitespace-pre-wrap">{lastMessage.content}</p>
-              <p className="text-xs text-gray-500 mt-2">
+            <div className="bg-[var(--tg-surface-muted)] border border-[var(--tg-border-soft)] rounded-lg p-3">
+              <p className="text-sm text-[var(--tg-text-primary)] whitespace-pre-wrap">{lastMessage.content}</p>
+              <p className="text-xs text-[var(--tg-text-muted)] mt-2">
                 {lastMessage.timestamp ? formatMessageDate(lastMessage.timestamp) : ''}
               </p>
             </div>
           ) : (
-            <p className="text-sm text-gray-400">No messages yet</p>
+            <p className="text-sm text-[var(--tg-text-muted)]">No messages yet</p>
           )}
         </div>
 
         <div className="space-y-4">
           {infoItems.map((item) => (
             <div key={item.label} className="flex flex-col">
-              <span className="text-xs uppercase text-gray-500 tracking-wide">{item.label}</span>
-              <span className="text-sm text-gray-200 break-all">{item.value}</span>
+              <span className="text-xs uppercase text-[var(--tg-text-muted)] tracking-wide">{item.label}</span>
+              <span className="text-sm text-[var(--tg-text-primary)] break-all">{item.value}</span>
             </div>
           ))}
         </div>

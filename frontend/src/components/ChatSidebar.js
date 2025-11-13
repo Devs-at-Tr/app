@@ -28,9 +28,13 @@ const ChatSidebar = ({
   onSelectChat,
   onRefresh,
   selectedPlatform = 'all',
-  loading = false
+  loading = false,
+  hideHeader = false,
+  searchQuery: controlledSearch,
+  onSearchQueryChange,
 }) => {
-  const [searchQuery, setSearchQuery] = useState('');
+  const [localSearch, setLocalSearch] = useState('');
+  const searchQuery = controlledSearch ?? localSearch;
 
   const totalUnread = useMemo(
     () => chats.reduce((count, chat) => count + (chat.unread_count || 0), 0),
@@ -85,41 +89,50 @@ const ChatSidebar = ({
     return formatMessageTime(timestamp) || formatMessageDate(timestamp);
   };
 
+  const handleSearchChange = (value) => {
+    if (onSearchQueryChange) {
+      onSearchQueryChange(value);
+    } else {
+      setLocalSearch(value);
+    }
+  };
+
   return (
-    <div className="bg-[#1a1a2e] border border-gray-800 rounded-xl h-full flex flex-col" data-testid="chat-sidebar">
-      {/* Header */}
-      <div className="p-4 border-b border-gray-800">
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center space-x-2">
-            <h2 className="text-lg font-bold text-white">Recent Chats</h2>
-            {totalUnread > 0 && (
-              <span className="px-2 py-0.5 bg-purple-500 text-xs font-semibold text-white rounded-full" data-testid="chat-unread-count">
-                {totalUnread}
-              </span>
-            )}
+    <div className="chat-panel h-full flex flex-col" data-testid="chat-sidebar">
+      {!hideHeader && (
+        <div className="p-4 border-b border-gray-800">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center space-x-2">
+              <h2 className="text-lg font-bold text-white">Recent Chats</h2>
+              {totalUnread > 0 && (
+                <span className="px-2 py-0.5 bg-purple-500 text-xs font-semibold text-white rounded-full" data-testid="chat-unread-count">
+                  {totalUnread}
+                </span>
+              )}
+            </div>
+            <Button
+              onClick={handleRefresh}
+              size="sm"
+              variant="outline"
+              className="bg-purple-500/10 border-purple-500/50 hover:bg-purple-500/20 text-purple-400"
+              data-testid="refresh-chats-button"
+            >
+              <RefreshCw className="w-4 h-4" />
+            </Button>
           </div>
-          <Button
-            onClick={handleRefresh}
-            size="sm"
-            variant="outline"
-            className="bg-purple-500/10 border-purple-500/50 hover:bg-purple-500/20 text-purple-400"
-            data-testid="refresh-chats-button"
-          >
-            <RefreshCw className="w-4 h-4" />
-          </Button>
-        </div>
-        
-        <div className="relative">
+          
+          <div className="relative">
           <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-500" />
           <Input
             placeholder="Search chats..."
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="pl-10 bg-[#0f0f1a] border-gray-700 text-white placeholder:text-gray-500"
+            onChange={(e) => handleSearchChange(e.target.value)}
+            className="pl-10 inbox-search-input inbox-search-input--compact"
             data-testid="search-chats-input"
           />
         </div>
       </div>
+      )}
 
       {/* Chat List */}
       <div className="flex-1 overflow-y-auto chat-scroll" data-testid="chat-list">

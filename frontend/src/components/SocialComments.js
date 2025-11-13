@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import axios from 'axios';
 import { API } from '../App';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { Input } from './ui/input';
 import { Button } from './ui/button';
 import { ScrollArea } from './ui/scroll-area';
@@ -10,6 +9,9 @@ import { Card } from './ui/card';
 import { Instagram, Facebook, ExternalLink, MessageCircle, Send, UserCircle, X } from 'lucide-react';
 import { Badge } from './ui/badge';
 import { useIsMobile } from '../hooks/useMediaQuery';
+import CommentsLayout from '../layouts/CommentsLayout';
+
+const SUPPORTED_CHANNELS = ['instagram', 'facebook'];
 
 const formatTimestamp = (value) => {
   if (!value) return '';
@@ -93,19 +95,35 @@ const CommentListItem = ({ comment, isActive, onSelect }) => {
   );
 };
 
-const ThreadMessage = ({ username, text, timestamp, align = 'left' }) => {
-  const isRight = align === 'right';
+const ThreadMessage = ({ message, onReply, onMessage }) => {
+  if (!message) {
+    return null;
+  }
 
   return (
-    <div className={`flex ${isRight ? 'justify-end' : 'justify-start'}`}>
-      <div
-        className={`max-w-[80%] rounded-2xl px-4 py-3 border border-gray-800 ${
-          isRight ? 'bg-gradient-to-r from-purple-600 to-pink-600 text-white' : 'bg-[#1a1a2e] text-gray-200'
-        }`}
-      >
-        <p className={`text-xs font-semibold ${isRight ? 'text-purple-100' : 'text-gray-300'}`}>{username}</p>
-        <p className="mt-1 text-sm whitespace-pre-line">{text}</p>
-        <p className={`mt-2 text-[11px] ${isRight ? 'text-purple-100/70' : 'text-gray-500'}`}>{formatTimestamp(timestamp)}</p>
+    <div className="flex items-start gap-3 py-3 border-b border-gray-800 last:border-b-0">
+      <Avatar className="w-10 h-10">
+        <img
+          src={message.profile_pic || `https://ui-avatars.com/api/?name=${message.username || 'User'}`}
+          alt={message.username || 'User'}
+        />
+      </Avatar>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-sm font-semibold text-white truncate">{message.username || 'Unknown'}</p>
+          <span className="text-xs text-gray-500 whitespace-nowrap">{formatTimestamp(message.timestamp)}</span>
+        </div>
+        <p className="mt-2 text-sm text-gray-200 whitespace-pre-line">
+          {message.text || 'No comment text provided.'}
+        </p>
+        <div className="flex flex-wrap items-center gap-4 text-xs text-gray-400 mt-2">
+          <button type="button" onClick={() => onReply?.(message.id)} className="hover:text-purple-300">
+            Reply
+          </button>
+          <button type="button" onClick={() => onMessage?.(message.id)} className="hover:text-purple-300">
+            Message
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -222,6 +240,24 @@ const SocialComments = ({ selectedPlatform = 'all' }) => {
     );
   }, [comments, activeTab, search]);
 
+  const threadMessages = useMemo(() => {
+    if (!selectedThread) {
+      return [];
+    }
+    const replies = Array.isArray(selectedThread.replies) ? selectedThread.replies : [];
+    return [
+      {
+        ...selectedThread,
+        kind: 'root'
+      },
+      ...replies.map((reply) => ({
+        ...reply,
+        kind: 'reply',
+        profile_pic: reply.profile_pic || selectedThread.profile_pic
+      }))
+    ];
+  }, [selectedThread]);
+
   const handleSendReply = async () => {
     if (!replyTarget || !replyText.trim()) return;
 
@@ -297,37 +333,66 @@ const SocialComments = ({ selectedPlatform = 'all' }) => {
     }
 
     const replies = selectedThread.replies || [];
+    const postSummary = selectedThread.post;
 
     return (
       <div className="flex-1 flex flex-col min-h-0">
-        <div className="bg-[#181828] border border-gray-800 rounded-xl p-4 mb-3">
-          <div className="flex items-start justify-between gap-3">
-            <div className="flex items-start gap-3 flex-1">
-              <Avatar className="w-10 h-10">
-                <img
-                  src={selectedThread.profile_pic || `https://ui-avatars.com/api/?name=${selectedThread.username}`}
-                  alt={selectedThread.username}
-                />
-              </Avatar>
-              <div className="min-w-0">
-                <p className="text-sm font-semibold text-white truncate">{selectedThread.username}</p>
-                <p className="text-xs text-gray-500 mt-1">{formatTimestamp(selectedThread.timestamp)}</p>
+        <div className="space-y-3">
+          <div className="bg-[#181828] border border-gray-800 rounded-xl p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-start gap-3 flex-1">
+                <Avatar className="w-10 h-10">
+                  <img
+                    src={selectedThread.profile_pic || `https://ui-avatars.com/api/?name=${selectedThread.username}`}
+                    alt={selectedThread.username}
+                  />
+                </Avatar>
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-white truncate">{selectedThread.username}</p>
+                  <p className="text-xs text-gray-500 mt-1">{formatTimestamp(selectedThread.timestamp)}</p>
+                </div>
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="text-gray-400 hover:text-gray-100"
+                onClick={toggleProfilePanel}
+                aria-label={isProfileOpen ? 'Hide profile' : 'Show profile'}
+              >
+                {isProfileOpen ? <X className="h-4 w-4" /> : <UserCircle className="h-4 w-4" />}
+              </Button>
+            </div>
+            <p className="mt-3 text-sm text-gray-200 whitespace-pre-line">
+              {selectedThread.text || 'No comment text provided.'}
+            </p>
+          </div>
+
+          {postSummary && (
+            <div className="bg-[#101023] border border-gray-800 rounded-xl p-4 flex gap-3 items-start">
+              {postSummary.media_url && (
+                <div className="w-16 h-16 rounded-lg bg-black/20 overflow-hidden flex-shrink-0">
+                  <img
+                    src={postSummary.media_url}
+                    alt={postSummary.caption || 'Post media'}
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+              )}
+              <div className="flex-1 min-w-0">
+                <p className="text-xs uppercase text-gray-500">Post</p>
+                <p className="text-sm font-semibold text-white">
+                  {postSummary.username || selectedThread.username}
+                </p>
+                <p className="text-xs text-gray-500">{formatTimestamp(postSummary.timestamp || selectedThread.timestamp)}</p>
+                {postSummary.caption && (
+                  <p className="text-sm text-gray-300 mt-2 whitespace-pre-line">
+                    {postSummary.caption}
+                  </p>
+                )}
               </div>
             </div>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="text-gray-400 hover:text-gray-100"
-              onClick={toggleProfilePanel}
-              aria-label={isProfileOpen ? 'Hide profile' : 'Show profile'}
-            >
-              {isProfileOpen ? <X className="h-4 w-4" /> : <UserCircle className="h-4 w-4" />}
-            </Button>
-          </div>
-          <p className="mt-3 text-sm text-gray-200 whitespace-pre-line">
-            {selectedThread.text || 'No comment text provided.'}
-          </p>
+          )}
         </div>
 
         {isProfileOpen && isMobile && (
@@ -342,19 +407,17 @@ const SocialComments = ({ selectedPlatform = 'all' }) => {
           </div>
         )}
 
-        <div className="flex-1 min-h-0 overflow-y-auto space-y-3 pr-1">
-          {replies.length === 0 ? (
-            <div className="text-center text-xs text-gray-500 py-8">No replies yet.</div>
+        <div className="flex-1 min-h-0 overflow-y-auto space-y-1 pr-1 mt-4">
+          {threadMessages.length === 0 ? (
+            <div className="text-center text-xs text-gray-500 py-8">No comments yet.</div>
           ) : (
-            replies.map((reply) => (
-              <div key={reply.id} className="px-1" onClick={() => handleReplyToMessage(reply.id)}>
-                <ThreadMessage
-                  username={reply.username}
-                  text={reply.text}
-                  timestamp={reply.timestamp}
-                  align={reply.username === selectedThread.username ? 'left' : 'right'}
-                />
-              </div>
+            threadMessages.map((message) => (
+              <ThreadMessage
+                key={message.id || `${message.kind}-${message.timestamp}`}
+                message={message}
+                onReply={handleReplyToMessage}
+                onMessage={handleReplyToMessage}
+              />
             ))
           )}
         </div>
@@ -435,31 +498,14 @@ const SocialComments = ({ selectedPlatform = 'all' }) => {
     </div>
   );
 
-  const renderContent = () => {
-    const threadColumnClass = `lg:col-span-8 ${!isMobile && isProfileOpen ? 'lg:col-span-5' : ''}`;
-
-    return (
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-12 h-[calc(100vh-320px)]">
-        <div className="lg:col-span-4 h-full min-h-0">{renderList()}</div>
-        <div className={`${threadColumnClass} h-full min-h-0 bg-[#1a1a2e] border border-gray-800 rounded-xl p-4 flex flex-col`}>
-          {renderThread()}
+  const renderPreview = () => {
+    if (!selectedThread) {
+      return (
+        <div className="h-full min-h-0 rounded-3xl border border-gray-800 bg-[#101023] flex items-center justify-center text-sm text-gray-500">
+          Select a comment to view post details
         </div>
-        {!isMobile && isProfileOpen && selectedThread && (
-          <div className="lg:col-span-3 h-full min-h-0">
-            <CommentProfilePanel
-              thread={selectedThread}
-              totalReplies={(selectedThread.replies || []).length}
-              onClose={toggleProfilePanel}
-              platform={activeTab}
-            />
-          </div>
-        )}
-      </div>
-    );
-  };
-
-  const renderProfile = () => {
-    if (!selectedThread) return null;
+      );
+    }
     
     return (
       <div className="h-full min-h-0">
@@ -472,43 +518,58 @@ const SocialComments = ({ selectedPlatform = 'all' }) => {
     );
   };
 
+  const commentTabs = useMemo(
+    () => [
+      { id: 'all', label: 'All messages', disabled: true },
+      { id: 'messenger', label: 'Messenger', disabled: true, badge: 'Soon' },
+      {
+        id: 'instagram',
+        label: 'Instagram comments',
+        icon: Instagram,
+        badge: comments.instagram?.length ?? 0
+      },
+      { id: 'whatsapp', label: 'WhatsApp', disabled: true, badge: 'Soon' },
+      {
+        id: 'facebook',
+        label: 'Facebook comments',
+        icon: Facebook,
+        badge: comments.facebook?.length ?? 0
+      }
+    ],
+    [comments]
+  );
+
+  const handleTabChange = (tabId) => {
+    if (!SUPPORTED_CHANNELS.includes(tabId)) {
+      return;
+    }
+    setActiveTab(tabId);
+  };
+
+  const previewColumn =
+    isMobile
+      ? null
+      : isProfileOpen
+        ? renderPreview()
+        : (
+          <div className="h-full min-h-0 rounded-3xl border border-gray-800 bg-[#101023] flex items-center justify-center text-sm text-gray-500">
+            Open “View details” to preview the post
+          </div>
+        );
+
   return (
-    <div className="flex flex-col gap-3">
-      {selectedPlatform === 'all' ? (
-        <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-          <TabsList className="inline-flex bg-[#1a1a2e] border border-gray-800 px-1 py-1 gap-1 justify-start w-max">
-            <TabsTrigger value="instagram" className="px-3 py-1.5 text-sm">
-              <Instagram className="h-4 w-4 mr-1 text-pink-400" />
-              Instagram
-            </TabsTrigger>
-            <TabsTrigger value="facebook" className="px-3 py-1.5 text-sm">
-              <Facebook className="h-4 w-4 mr-1 text-blue-400" />
-              Facebook
-            </TabsTrigger>
-          </TabsList>
-          <TabsContent value="instagram">
-            <div className="grid grid-cols-12 gap-4 h-[calc(100vh-320px)]">
-              <div className="col-span-4 h-full min-h-0">{renderList()}</div>
-              <div className="col-span-5 h-full min-h-0">{renderThread()}</div>
-              <div className="col-span-3 h-full min-h-0">{renderProfile()}</div>
-            </div>
-          </TabsContent>
-          <TabsContent value="facebook">
-            <div className="grid grid-cols-12 gap-4 h-[calc(100vh-320px)]">
-              <div className="col-span-4 h-full min-h-0">{renderList()}</div>
-              <div className="col-span-5 h-full min-h-0">{renderThread()}</div>
-              <div className="col-span-3 h-full min-h-0">{renderProfile()}</div>
-            </div>
-          </TabsContent>
-        </Tabs>
-      ) : (
-        <div className="grid grid-cols-12 gap-4 h-[calc(100vh-320px)]">
-          <div className="col-span-4 h-full min-h-0">{renderList()}</div>
-          <div className="col-span-5 h-full min-h-0">{renderThread()}</div>
-          <div className="col-span-3 h-full min-h-0">{renderProfile()}</div>
+    <CommentsLayout
+      tabs={commentTabs}
+      activeTab={activeTab}
+      onTabChange={handleTabChange}
+      postsColumn={renderList()}
+      threadColumn={
+        <div className="bg-[#1a1a2e] border border-gray-800 rounded-3xl p-4 flex flex-col h-full min-h-0">
+          {renderThread()}
         </div>
-      )}
-    </div>
+      }
+      previewColumn={previewColumn}
+    />
   );
 };
 

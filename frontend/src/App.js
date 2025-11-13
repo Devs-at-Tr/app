@@ -5,8 +5,12 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { WebSocketProvider } from './context/WebSocketContext';
 import { ThemeProvider } from './context/ThemeContext';
 import LoginPage from './pages/LoginPage';
-import DashboardPage from './pages/DashboardPage';
 import SignupPage from './pages/SignupPage';
+import InboxPage from './pages/InboxPage';
+import TemplatesPage from './pages/TemplatesPage';
+import CommentsPage from './pages/CommentsPage';
+import UserDirectoryPage from './pages/UserDirectoryPage';
+import PositionsPage from './pages/PositionsPage';
 
 // Get backend URL from environment or use relative path for Kubernetes ingress
 export const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || '';
@@ -94,9 +98,63 @@ function App() {
             />
             <Route
               path="/"
+              element={<Navigate to="/inbox" replace />}
+            />
+            <Route
+              path="/inbox"
               element={
                 user ? (
-                  <DashboardPage user={user} onLogout={handleLogout} />
+                  <InboxPage user={user} onLogout={handleLogout} />
+                ) : (
+                  <Navigate to="/login" replace />
+                )
+              }
+            />
+            <Route
+              path="/inbox/:channel"
+              element={
+                user ? (
+                  <InboxPage user={user} onLogout={handleLogout} />
+                ) : (
+                  <Navigate to="/login" replace />
+                )
+              }
+            />
+            <Route
+              path="/templates"
+              element={
+                user ? (
+                  <TemplatesPage user={user} onLogout={handleLogout} />
+                ) : (
+                  <Navigate to="/login" replace />
+                )
+              }
+            />
+            <Route
+              path="/comments"
+              element={
+                user ? (
+                  <CommentsPage user={user} onLogout={handleLogout} />
+                ) : (
+                  <Navigate to="/login" replace />
+                )
+              }
+            />
+            <Route
+              path="/user-directory"
+              element={
+                user ? (
+                  <UserDirectoryPage user={user} onLogout={handleLogout} />
+                ) : (
+                  <Navigate to="/login" replace />
+                )
+              }
+            />
+            <Route
+              path="/positions"
+              element={
+                user ? (
+                  <PositionsPage user={user} onLogout={handleLogout} />
                 ) : (
                   <Navigate to="/login" replace />
                 )
