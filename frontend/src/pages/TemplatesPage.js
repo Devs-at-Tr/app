@@ -12,15 +12,17 @@ const TemplatesPage = ({ user, onLogout }) => {
     () => hasAnyPermission(user, ['position:assign', 'position:manage', 'chat:assign']),
     [user]
   );
+  const canInviteUsers = useMemo(() => hasPermission(user, 'user:invite'), [user]);
 
   const navItems = useMemo(
     () =>
       buildNavigationItems({
         canManageTemplates,
         canViewUserRoster,
-        canManagePositions
+        canManagePositions,
+        canInviteUsers
       }),
-    [canManageTemplates, canViewUserRoster, canManagePositions]
+    [canManageTemplates, canViewUserRoster, canManagePositions, canInviteUsers]
   );
 
   return (

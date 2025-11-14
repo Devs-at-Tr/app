@@ -93,6 +93,20 @@ class User(Base):
     assigned_chats = relationship("Chat", back_populates="assigned_agent", foreign_keys="Chat.assigned_to")
     position = relationship("Position", back_populates="users")
 
+
+class PasswordResetToken(Base):
+    __tablename__ = "password_reset_tokens"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String(36), ForeignKey("users.id"), nullable=False, index=True)
+    token_hash = Column(String(128), nullable=False, unique=True)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    used_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utc_now)
+    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+    user = relationship("User", backref="password_reset_tokens")
+
 class InstagramAccount(Base):
     __tablename__ = "instagram_accounts"
     

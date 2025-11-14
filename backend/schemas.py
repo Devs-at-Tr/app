@@ -66,6 +66,28 @@ class UserLogin(BaseModel):
     email: EmailStr
     password: str
 
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    password: str = Field(min_length=8)
+
+
+class AdminUserCreate(BaseModel):
+    name: str
+    email: EmailStr
+    password: str = Field(min_length=8)
+    role: UserRole = UserRole.AGENT
+    position_id: Optional[str] = None
+
+
+class AuthConfigResponse(BaseModel):
+    allow_public_signup: bool
+    forgot_password_enabled: bool = True
+
 class UserResponse(BaseModel):
     id: str
     name: str

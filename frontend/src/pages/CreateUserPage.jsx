@@ -1,0 +1,294 @@
+import React, { useCallback, useMemo, useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+import axios from 'axios';
+import AppShell from '../layouts/AppShell';
+import AdminLayout from '../layouts/AdminLayout';
+import { API } from '../App';
+import { Button } from '../components/ui/button';
+import { Input } from '../components/ui/input';
+import { Label } from '../components/ui/label';
+import { hasPermission, hasAnyPermission } from '../utils/permissionUtils';
+import { buildNavigationItems } from '../utils/navigationConfig';
+
+const DEFAULT_FORM = {
+  name: '',
+  email: '',
+  password: '1234',
+  role: 'agent',
+  positionId: ''
+};
+
+const CreateUserPage = ({ user, onLogout }) => {
+  const navigate = useNavigate();
+  const [form, setForm] = useState(DEFAULT_FORM);
+  const [positions, setPositions] = useState([]);
+  const [positionsError, setPositionsError] = useState('');
+  const [loadingPositions, setLoadingPositions] = useState(false);
+  const [status, setStatus] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  const canManageTemplates = useMemo(() => hasPermission(user, 'template:manage'), [user]);
+  const canManagePositions = useMemo(() => hasPermission(user, 'position:manage'), [user]);
+  const canViewUserRoster = useMemo(
+    () => hasAnyPermission(user, ['position:assign', 'position:manage', 'chat:assign']),
+    [user]
+  );
+  const canInviteUsers = useMemo(() => hasPermission(user, 'user:invite'), [user]);
+  const canLoadPositions = useMemo(
+    () => hasAnyPermission(user, ['position:assign', 'position:manage']),
+    [user]
+  );
+
+  const navigationItems = useMemo(
+    () =>
+      buildNavigationItems({
+        canManageTemplates,
+        canViewUserRoster,
+        canManagePositions,
+        canInviteUsers
+      }),
+    [canManageTemplates, canViewUserRoster, canManagePositions, canInviteUsers]
+  );
+
+  const loadPositions = useCallback(async () => {
+    if (!canLoadPositions) {
+      setPositions([]);
+      return;
+    }
+    setLoadingPositions(true);
+    setPositionsError('');
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        throw new Error('Missing auth token');
+      }
+      const response = await axios.get(`${API}/positions`, {
+        headers: { Authorization: `Bearer ${token}` },
+        timeout: 20000
+      });
+      setPositions(response.data || []);
+    } catch (err) {
+      console.error('Failed to load positions:', err);
+      setPositionsError(err.response?.data?.detail || 'Unable to load positions.');
+    } finally {
+      setLoadingPositions(false);
+    }
+  }, [canLoadPositions]);
+
+  useEffect(() => {
+    loadPositions();
+  }, [loadPositions]);
+
+  const handleInputChange = (field) => (event) => {
+    const value = event?.target ? event.target.value : event;
+    setForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+    setStatus(null);
+    if (!canInviteUsers) {
+      return;
+    }
+    if (!form.name.trim() || !form.email.trim()) {
+      setStatus({ type: 'error', message: 'Name and email are required.' });
+      return;
+    }
+    if (form.password.length < 4) {
+      setStatus({ type: 'error', message: 'Password is too short.' });
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        throw new Error('Missing auth token');
+      }
+      await axios.post(
+        `${API}/admin/users`,
+        {
+          name: form.name.trim(),
+          email: form.email.trim(),
+          password: form.password,
+          role: form.role,
+          position_id: form.positionId || null
+        },
+        {
+          headers: { Authorization: `Bearer ${token}` },
+          timeout: 20000
+        }
+      );
+      setStatus({ type: 'success', message: 'User created successfully.' });
+      setForm(DEFAULT_FORM);
+      if (canLoadPositions) {
+        await loadPositions();
+      }
+    } catch (err) {
+      console.error('User creation failed:', err);
+      setStatus({
+        type: 'error',
+        message: err.response?.data?.detail || 'Unable to create user.'
+      });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const renderStatus = () => {
+    if (!status) return null;
+    const baseClass = 'px-4 py-3 rounded-xl text-sm';
+    if (status.type === 'success') {
+      return (
+        <div className={`${baseClass} bg-emerald-500/10 border border-emerald-500/40 text-emerald-100`}>
+          {status.message}
+        </div>
+      );
+    }
+    return (
+      <div className={`${baseClass} bg-red-500/10 border border-red-500/40 text-red-100`}>
+        {status.message}
+      </div>
+    );
+  };
+
+  return (
+    <AppShell user={user} navItems={navigationItems} onLogout={onLogout}>
+      <AdminLayout
+        title="Create User"
+        description="Provision a teammate account directly from the admin workspace."
+        actions={
+          <Button variant="ghost" onClick={() => navigate('/user-directory')}>
+            Back to directory
+          </Button>
+        }
+      >
+        {!canInviteUsers ? (
+          <div className="rounded-xl border border-[var(--tg-border-soft)] bg-[var(--tg-surface)] p-6 text-sm text-[var(--tg-text-secondary)]">
+            You do not have permission to create users.
+          </div>
+        ) : (
+          <form
+            onSubmit={handleSubmit}
+            className="max-w-2xl rounded-2xl border border-[var(--tg-border-soft)] bg-[var(--tg-surface)] p-6 space-y-6"
+          >
+            {renderStatus()}
+            <div className="grid md:grid-cols-2 gap-4">
+              <div>
+                <Label htmlFor="name" className="text-sm text-[var(--tg-text-secondary)]">
+                  Full name
+                </Label>
+                <Input
+                  id="name"
+                  value={form.name}
+                  onChange={handleInputChange('name')}
+                  placeholder="Alex Mercer"
+                  required
+                />
+              </div>
+              <div>
+                <Label htmlFor="email" className="text-sm text-[var(--tg-text-secondary)]">
+                  Email
+                </Label>
+                <Input
+                  id="email"
+                  type="email"
+                  value={form.email}
+                  onChange={handleInputChange('email')}
+                  placeholder="agent@ticklegram.com"
+                  required
+                />
+              </div>
+            </div>
+
+            <div className="grid md:grid-cols-2 gap-4">
+              <div>
+                <Label htmlFor="role" className="text-sm text-[var(--tg-text-secondary)]">
+                  Role
+                </Label>
+                <select
+                  id="role"
+                  value={form.role}
+                  onChange={handleInputChange('role')}
+                  className="w-full h-11 rounded-lg border border-[var(--tg-border-soft)] bg-[var(--tg-surface-muted)] px-3 text-sm"
+                >
+                  <option value="agent">Agent</option>
+                  <option value="admin">Admin</option>
+                </select>
+              </div>
+              <div>
+                <Label htmlFor="password" className="text-sm text-[var(--tg-text-secondary)]">
+                  Initial password
+                </Label>
+                <Input
+                  id="password"
+                  type="text"
+                  value={form.password}
+                  onChange={handleInputChange('password')}
+                  minLength={4}
+                  required
+                />
+                <p className="mt-1 text-xs text-[var(--tg-text-muted)]">
+                  Prefilled with <code>1234</code>. Update before sending to the user.
+                </p>
+              </div>
+            </div>
+
+            <div>
+              <Label htmlFor="position" className="text-sm text-[var(--tg-text-secondary)]">
+                Position
+              </Label>
+              {canLoadPositions ? (
+                <>
+                  <select
+                    id="position"
+                    value={form.positionId}
+                    onChange={handleInputChange('positionId')}
+                    className="w-full h-11 rounded-lg border border-[var(--tg-border-soft)] bg-[var(--tg-surface-muted)] px-3 text-sm"
+                  >
+                    <option value="">Auto-assign default for role</option>
+                    {positions.map((position) => (
+                      <option key={position.id} value={position.id}>
+                        {position.name}
+                      </option>
+                    ))}
+                  </select>
+                  {loadingPositions && (
+                    <p className="mt-1 text-xs text-[var(--tg-text-muted)]">Loading positions…</p>
+                  )}
+                  {positionsError && (
+                    <p className="mt-1 text-xs text-red-300">{positionsError}</p>
+                  )}
+                </>
+              ) : (
+                <div className="mt-2 text-xs text-[var(--tg-text-muted)]">
+                  Default {form.role === 'admin' ? 'Admin' : 'Agent'} position will be assigned automatically.
+                </div>
+              )}
+            </div>
+
+            <div className="flex flex-wrap gap-3">
+              <Button
+                type="submit"
+                disabled={submitting}
+                className="bg-gradient-to-r from-purple-500 via-pink-500 to-orange-400 text-white px-6"
+              >
+                {submitting ? 'Creating user...' : 'Create user'}
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                disabled={submitting}
+                onClick={() => setForm(DEFAULT_FORM)}
+              >
+                Reset form
+              </Button>
+            </div>
+          </form>
+        )}
+      </AdminLayout>
+    </AppShell>
+  );
+};
+
+export default CreateUserPage;

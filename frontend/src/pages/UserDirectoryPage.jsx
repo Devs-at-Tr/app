@@ -23,15 +23,17 @@ const UserDirectoryPage = ({ user, onLogout }) => {
     [user]
   );
   const canAssignPositions = useMemo(() => hasPermission(user, 'position:assign'), [user]);
+  const canInviteUsers = useMemo(() => hasPermission(user, 'user:invite'), [user]);
 
   const navigationItems = useMemo(
     () =>
       buildNavigationItems({
         canManageTemplates,
         canViewUserRoster,
-        canManagePositions
+        canManagePositions,
+        canInviteUsers
       }),
-    [canManageTemplates, canViewUserRoster, canManagePositions]
+    [canManageTemplates, canViewUserRoster, canManagePositions, canInviteUsers]
   );
 
   const loadUserRoster = useCallback(async () => {

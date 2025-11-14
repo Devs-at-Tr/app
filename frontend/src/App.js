@@ -11,6 +11,9 @@ import TemplatesPage from './pages/TemplatesPage';
 import CommentsPage from './pages/CommentsPage';
 import UserDirectoryPage from './pages/UserDirectoryPage';
 import PositionsPage from './pages/PositionsPage';
+import ForgotPasswordPage from './pages/ForgotPasswordPage';
+import ResetPasswordPage from './pages/ResetPasswordPage';
+import CreateUserPage from './pages/CreateUserPage';
 
 // Get backend URL from environment or use relative path for Kubernetes ingress
 export const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || '';
@@ -19,10 +22,16 @@ export const API = BACKEND_URL ? `${BACKEND_URL}/api` : '/api';
 function App() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [configLoading, setConfigLoading] = useState(true);
   const [appError, setAppError] = useState('');
+  const [authConfig, setAuthConfig] = useState({
+    allowPublicSignup: false,
+    forgotPasswordEnabled: true
+  });
 
   useEffect(() => {
     checkAuth();
+    loadAuthConfig();
   }, []);
 
   const checkAuth = async () => {
@@ -46,6 +55,23 @@ function App() {
     setLoading(false);
   };
 
+  const loadAuthConfig = async () => {
+    try {
+      const response = await axios.get(`${API}/auth/config`, { timeout: 8000 });
+      setAuthConfig({
+        allowPublicSignup: Boolean(response.data?.allow_public_signup ?? response.data?.allowPublicSignup),
+        forgotPasswordEnabled: Boolean(response.data?.forgot_password_enabled ?? response.data?.forgotPasswordEnabled ?? true)
+      });
+    } catch (error) {
+      console.error('Failed to load auth config:', error.message);
+      if (!appError && error.message === 'Network Error') {
+        setAppError('Cannot connect to server. Please check your internet connection.');
+      }
+    } finally {
+      setConfigLoading(false);
+    }
+  };
+
   const handleLogin = (userData, token) => {
     localStorage.setItem('token', token);
     setUser(userData);
@@ -56,7 +82,7 @@ function App() {
     setUser(null);
   };
 
-  if (loading) {
+  if (loading || configLoading) {
     return (
       <div className="min-h-screen bg-[#0f0f1a] flex items-center justify-center">
         {appError ? (
@@ -80,7 +106,11 @@ function App() {
               path="/login"
               element={
                 !user ? (
-                  <LoginPage onLogin={handleLogin} />
+                  <LoginPage
+                    onLogin={handleLogin}
+                    allowPublicSignup={authConfig.allowPublicSignup}
+                    forgotPasswordEnabled={authConfig.forgotPasswordEnabled}
+                  />
                 ) : (
                   <Navigate to="/" replace />
                 )
@@ -89,8 +119,32 @@ function App() {
             <Route
               path="/signup"
               element={
+                authConfig.allowPublicSignup ? (
+                  !user ? <SignupPage /> : <Navigate to="/" replace />
+                ) : (
+                  <Navigate
+                    to="/login"
+                    replace
+                    state={{ info: 'Self-service sign up is disabled. Contact your workspace admin.' }}
+                  />
+                )
+              }
+            />
+            <Route
+              path="/forgot-password"
+              element={
                 !user ? (
-                  <SignupPage />
+                  <ForgotPasswordPage forgotPasswordEnabled={authConfig.forgotPasswordEnabled} />
+                ) : (
+                  <Navigate to="/" replace />
+                )
+              }
+            />
+            <Route
+              path="/reset-password"
+              element={
+                !user ? (
+                  <ResetPasswordPage forgotPasswordEnabled={authConfig.forgotPasswordEnabled} />
                 ) : (
                   <Navigate to="/" replace />
                 )
@@ -155,6 +209,16 @@ function App() {
               element={
                 user ? (
                   <PositionsPage user={user} onLogout={handleLogout} />
+                ) : (
+                  <Navigate to="/login" replace />
+                )
+              }
+            />
+            <Route
+              path="/admin/users/new"
+              element={
+                user ? (
+                  <CreateUserPage user={user} onLogout={handleLogout} />
                 ) : (
                   <Navigate to="/login" replace />
                 )

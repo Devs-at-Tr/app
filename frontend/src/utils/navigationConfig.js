@@ -6,13 +6,15 @@ import {
   MessageSquare,
   FileText,
   Users,
-  Shield
+  Shield,
+  UserPlus
 } from 'lucide-react';
 
 export const buildNavigationItems = ({
   canManageTemplates,
   canViewUserRoster,
-  canManagePositions
+  canManagePositions,
+  canInviteUsers
 }) => {
   const items = [
     { id: 'inbox', label: 'Direct Messages', icon: MessageCircle, to: '/inbox', exact: true },
@@ -28,6 +30,10 @@ export const buildNavigationItems = ({
 
   if (canViewUserRoster) {
     items.push({ id: 'user-directory', label: 'User Directory', icon: Users, to: '/user-directory' });
+  }
+
+  if (canInviteUsers) {
+    items.push({ id: 'create-user', label: 'Create User', icon: UserPlus, to: '/admin/users/new' });
   }
 
   if (canManagePositions) {

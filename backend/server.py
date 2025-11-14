@@ -19,6 +19,8 @@ from urllib.parse import urlparse
 import re
 import requests
 import hashlib
+import secrets
+import html
 from database import engine, get_db, Base, SessionLocal
 from utils.timezone import utc_now
 from migrations.runner import run_all_migrations as ensure_instagram_profile_schema
@@ -44,7 +46,8 @@ from models import (
     InstagramCommentAction,
     InstagramMarketingEvent,
     InstagramInsight,
-    InstagramInsightScope
+    InstagramInsightScope,
+    PasswordResetToken
 )
 from schemas import (
     UserRegister, UserLogin, UserResponse, TokenResponse,
@@ -68,7 +71,11 @@ from schemas import (
     PositionUpdate,
     PositionResponse,
     UserPositionUpdate,
-    UserRosterEntry
+    UserRosterEntry,
+    ForgotPasswordRequest,
+    ResetPasswordRequest,
+    AdminUserCreate,
+    AuthConfigResponse
 )
 from auth import verify_password, get_password_hash, create_access_token, decode_access_token
 from facebook_api import facebook_client, FacebookMode
@@ -86,6 +93,7 @@ from permissions import (
     is_super_admin_user,
     DEFAULT_POSITION_SLUGS
 )
+from utils.mailer import send_email
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -103,6 +111,20 @@ INSTAGRAM_PAGE_ACCESS_TOKEN = os.getenv("INSTAGRAM_PAGE_ACCESS_TOKEN") or os.get
 INSTAGRAM_VERIFY_TOKEN = os.getenv("VERIFY_TOKEN") or os.getenv("INSTAGRAM_WEBHOOK_VERIFY_TOKEN") or os.getenv("FACEBOOK_WEBHOOK_VERIFY_TOKEN")
 
 ChatMessageModel = Union[InstagramChatMessage, FacebookMessage]
+
+ALLOW_PUBLIC_SIGNUP = os.getenv("ALLOW_PUBLIC_SIGNUP", "false").lower() in {"1", "true", "yes"}
+PASSWORD_RESET_TOKEN_LIFETIME_MINUTES = int(os.getenv("PASSWORD_RESET_TOKEN_MINUTES", "60"))
+FRONTEND_BASE_URL = (
+    os.getenv("FRONTEND_BASE_URL")
+    or os.getenv("APP_BASE_URL")
+    or os.getenv("PUBLIC_APP_URL")
+    or os.getenv("FRONTEND_URL")
+)
+FORGOT_PASSWORD_ENABLED = os.getenv("ENABLE_FORGOT_PASSWORD", "true").lower() in {"1", "true", "yes"}
+PASSWORD_RESET_EMAIL_SUBJECT = os.getenv(
+    "PASSWORD_RESET_EMAIL_SUBJECT", "Reset your TickleGram password"
+)
+PASSWORD_RESET_EMAIL_CONTACT = os.getenv("SUPPORT_CONTACT_EMAIL", "support@ticklegram.com")
 
 
 def _message_model_for_platform(platform: MessagePlatform) -> Type[ChatMessageModel]:
@@ -315,6 +337,78 @@ def _resolve_position_for_user(
         return position
     role = role or UserRole.AGENT
     return get_default_position(db, role)
+
+
+def _normalize_email(value: str) -> str:
+    return (value or "").strip().lower()
+
+
+def _ensure_timezone_aware(dt: Optional[datetime]) -> Optional[datetime]:
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _hash_reset_token(raw_token: str) -> str:
+    return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+
+
+def _reset_base_url(request: Optional[Request]) -> str:
+    if FRONTEND_BASE_URL:
+        return FRONTEND_BASE_URL.rstrip("/")
+    if request is None:
+        return ""
+    return str(request.base_url).rstrip("/")
+
+
+def _build_password_reset_url(raw_token: str, request: Optional[Request]) -> str:
+    base = _reset_base_url(request)
+    if not base:
+        return f"/reset-password?token={raw_token}"
+    return f"{base}/reset-password?token={raw_token}"
+
+
+def _purge_expired_reset_tokens(db: Session) -> None:
+    db.query(PasswordResetToken).filter(
+        PasswordResetToken.expires_at < utc_now()
+    ).delete(synchronize_session=False)
+
+
+def _send_password_reset_email(email: str, name: Optional[str], reset_url: str) -> None:
+    recipient_name = name or "there"
+    minutes = PASSWORD_RESET_TOKEN_LIFETIME_MINUTES
+    plain_body = (
+        f"Hi {recipient_name},\n\n"
+        "We received a request to reset the password for your TickleGram account. "
+        f"If you made this request, use the link below within {minutes} minutes:\n\n"
+        f"{reset_url}\n\n"
+        "If you didn't request a password reset, you can safely ignore this email or contact support.\n\n"
+        f"Need help? Reach out to us anytime at {PASSWORD_RESET_EMAIL_CONTACT}.\n\n"
+        "— The TickleGram Team"
+    )
+    escaped_name = html.escape(recipient_name)
+    html_body = f"""
+        <p>Hi {escaped_name},</p>
+        <p>We received a request to reset the password for your TickleGram account. If you made this request, click the button below within {minutes} minutes.</p>
+        <p style="text-align:center;margin:24px 0;">
+            <a href="{reset_url}" style="background:#a855f7;color:#fff;padding:12px 20px;border-radius:999px;text-decoration:none;display:inline-block;">
+                Reset password
+            </a>
+        </p>
+        <p>If the button doesn't work, paste this link into your browser:<br/><a href="{reset_url}">{reset_url}</a></p>
+        <p>If you didn't request a password reset, you can ignore this email or contact us at <a href="mailto:{PASSWORD_RESET_EMAIL_CONTACT}">{PASSWORD_RESET_EMAIL_CONTACT}</a>.</p>
+        <p>— The TickleGram Team</p>
+    """
+    delivered = send_email(
+        subject=PASSWORD_RESET_EMAIL_SUBJECT,
+        body_text=plain_body,
+        body_html=html_body,
+        to_addresses=[email],
+    )
+    if not delivered:
+        logger.warning("Password reset email not sent (check SMTP config). Recipient=%s", email)
 
 
 def _annotate_user(user: User) -> User:
@@ -910,7 +1004,10 @@ def signup(
     db: Session = Depends(get_db)
 ):
     """Public endpoint to create new agent accounts."""
-    existing_user = db.query(User).filter(User.email == user_data.email).first()
+    if not ALLOW_PUBLIC_SIGNUP:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Public signup is disabled")
+    normalized_email = _normalize_email(user_data.email)
+    existing_user = db.query(User).filter(func.lower(User.email) == normalized_email).first()
     if existing_user:
         raise HTTPException(status_code=400, detail="Email already registered")
 
@@ -919,7 +1016,7 @@ def signup(
 
     new_user = User(
         name=user_data.name,
-        email=user_data.email,
+        email=normalized_email,
         password_hash=get_password_hash(user_data.password),
         role=role
     )
@@ -932,6 +1029,99 @@ def signup(
 
     logger.info(f"New agent registered: {new_user.email}")
     return _annotate_user(new_user)
+
+
+@api_router.get("/auth/config", response_model=AuthConfigResponse)
+def auth_config():
+    return AuthConfigResponse(
+        allow_public_signup=ALLOW_PUBLIC_SIGNUP,
+        forgot_password_enabled=FORGOT_PASSWORD_ENABLED,
+    )
+
+
+@api_router.post("/auth/forgot-password")
+def request_password_reset(
+    payload: ForgotPasswordRequest,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    if not FORGOT_PASSWORD_ENABLED:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+
+    normalized_email = _normalize_email(payload.email)
+    _purge_expired_reset_tokens(db)
+
+    user = db.query(User).filter(func.lower(User.email) == normalized_email).first()
+    raw_token: Optional[str] = None
+
+    if user:
+        db.query(PasswordResetToken).filter(
+            PasswordResetToken.user_id == user.id,
+            PasswordResetToken.used_at.is_(None),
+        ).delete(synchronize_session=False)
+
+        raw_token = secrets.token_urlsafe(48)
+        reset_token = PasswordResetToken(
+            user_id=user.id,
+            token_hash=_hash_reset_token(raw_token),
+            expires_at=utc_now() + timedelta(minutes=PASSWORD_RESET_TOKEN_LIFETIME_MINUTES),
+        )
+        db.add(reset_token)
+
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        logger.exception("Failed to persist password reset token for %s", normalized_email)
+        raise HTTPException(status_code=500, detail="Unable to process request at this time")
+
+    if user and raw_token:
+        reset_url = _build_password_reset_url(raw_token, request)
+        _send_password_reset_email(user.email, user.name, reset_url)
+        logger.info("Password reset email queued for %s", user.email)
+
+    return {"message": "If an account exists for that email, a reset link has been sent."}
+
+
+@api_router.post("/auth/reset-password")
+def reset_password(payload: ResetPasswordRequest, db: Session = Depends(get_db)):
+    if not FORGOT_PASSWORD_ENABLED:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+
+    token_hash = _hash_reset_token(payload.token)
+    token_record = (
+        db.query(PasswordResetToken)
+        .filter(PasswordResetToken.token_hash == token_hash)
+        .first()
+    )
+    now = utc_now()
+    expires_at = _ensure_timezone_aware(token_record.expires_at)
+
+    if not token_record or token_record.used_at is not None or expires_at is None or expires_at < now:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired reset token")
+
+    user = db.query(User).filter(User.id == token_record.user_id).first()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired reset token")
+
+    user.password_hash = get_password_hash(payload.password)
+    token_record.used_at = now
+
+    other_tokens = (
+        db.query(PasswordResetToken)
+        .filter(
+            PasswordResetToken.user_id == token_record.user_id,
+            PasswordResetToken.used_at.is_(None),
+            PasswordResetToken.id != token_record.id,
+        )
+        .all()
+    )
+    for other in other_tokens:
+        other.used_at = now
+
+    db.commit()
+    logger.info("Password reset completed for %s", user.email)
+    return {"message": "Password updated successfully."}
 
 @api_router.post("/auth/login", response_model=TokenResponse)
 def login(credentials: UserLogin, db: Session = Depends(get_db)):
@@ -1004,6 +1194,35 @@ def user_roster(
         user_payload["assigned_chat_count"] = int(counts.get(user.id, 0) or 0)
         roster.append(UserRosterEntry.model_validate(user_payload))
     return roster
+
+
+@api_router.post("/admin/users", response_model=UserResponse)
+def admin_create_user(
+    user_data: AdminUserCreate,
+    current_user: User = Depends(require_any_permissions(PermissionCode.USER_INVITE)),
+    db: Session = Depends(get_db)
+):
+    normalized_email = _normalize_email(user_data.email)
+    existing_user = db.query(User).filter(func.lower(User.email) == normalized_email).first()
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    new_user = User(
+        name=user_data.name.strip(),
+        email=normalized_email,
+        password_hash=get_password_hash(user_data.password),
+        role=user_data.role or UserRole.AGENT,
+    )
+    position = _resolve_position_for_user(db, user_data.role, user_data.position_id)
+    if position:
+        new_user.position_id = position.id
+
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+
+    logger.info("User %s created by %s", new_user.email, current_user.email)
+    return UserResponse.model_validate(_annotate_user(new_user))
 
 
 # ============= POSITION MANAGEMENT ENDPOINTS =============
@@ -2692,29 +2911,30 @@ async def send_message(chat_id: str, message_data: MessageCreate, current_user: 
     
     _assert_chat_access(current_user, chat)
     
-    # Enforce Meta's 24-hour human agent policy
-    message_model = _message_model_for_platform(chat.platform)
-    last_customer_message = (
-        message_query_for_chat(db, chat)
-        .filter(
-            message_model.chat_id == chat_id,
-            message_model.sender != MessageSender.AGENT
-        )
-        .order_by(message_model.timestamp.desc())
-        .first()
-    )
-
-    if last_customer_message:
-        # Ensure the timestamp is timezone-aware before comparison
-        msg_timestamp = last_customer_message.timestamp
-        if not msg_timestamp.tzinfo:
-            msg_timestamp = msg_timestamp.replace(tzinfo=timezone.utc)
-        window_deadline = msg_timestamp + timedelta(hours=24)
-        if utc_now() > window_deadline:
-            raise HTTPException(
-                status_code=403,
-                detail="Outside the 24-hour human agent window. Send an approved template instead."
+    # Enforce Meta's 24-hour human agent policy (Facebook only)
+    if chat.platform == MessagePlatform.FACEBOOK:
+        message_model = _message_model_for_platform(chat.platform)
+        last_customer_message = (
+            message_query_for_chat(db, chat)
+            .filter(
+                message_model.chat_id == chat_id,
+                message_model.sender != MessageSender.AGENT
             )
+            .order_by(message_model.timestamp.desc())
+            .first()
+        )
+
+        if last_customer_message:
+            # Ensure the timestamp is timezone-aware before comparison
+            msg_timestamp = last_customer_message.timestamp
+            if not msg_timestamp.tzinfo:
+                msg_timestamp = msg_timestamp.replace(tzinfo=timezone.utc)
+            window_deadline = msg_timestamp + timedelta(hours=24)
+            if utc_now() > window_deadline:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Outside the 24-hour human agent window. Send an approved template instead."
+                )
 
     # If in mock mode, just create the message without actual platform integration
     if instagram_client.mode == InstagramMode.MOCK and facebook_client.mode == FacebookMode.MOCK:
@@ -3690,13 +3910,21 @@ app.include_router(api_router)
 # )
 
 # Configure CORS
-cors_origins_str = os.getenv('CORS_ORIGINS', '*')
-origins = cors_origins_str.split(',') if cors_origins_str != '*' else ['*']
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+cors_origins_str = os.getenv('CORS_ORIGINS', '*').strip()
+if cors_origins_str == '*':
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origin_regex=r".*",
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+else:
+    origins = [origin.strip() for origin in cors_origins_str.split(',') if origin.strip()]
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins or ["http://localhost:3000"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )

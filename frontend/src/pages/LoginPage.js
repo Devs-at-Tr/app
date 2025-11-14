@@ -1,16 +1,34 @@
-import React, { useState } from 'react';
-import { Link } from 'react-router-dom';
+import React, { useEffect, useState } from 'react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API } from '../App';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 
-const LoginPage = ({ onLogin }) => {
+const LoginPage = ({ onLogin, allowPublicSignup = false, forgotPasswordEnabled = true }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState(null);
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    if (!location.state) {
+      return;
+    }
+    const { success, info, error: stateError } = location.state;
+    if (success) {
+      setNotice({ type: 'success', message: success });
+    } else if (info) {
+      setNotice({ type: 'info', message: info });
+    } else if (stateError) {
+      setNotice({ type: 'error', message: stateError });
+    }
+    navigate(location.pathname, { replace: true });
+  }, [location, navigate]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -47,8 +65,22 @@ const LoginPage = ({ onLogin }) => {
         </div>
 
         {/* Login Card */}
-        <div className="bg-[#1a1a2e] backdrop-blur-lg rounded-2xl shadow-2xl border border-gray-800 p-8">
+        <div className="bg-[#111328]/90 backdrop-blur-xl rounded-3xl shadow-[0_25px_70px_rgba(17,12,46,0.4)] border border-white/5 p-8 space-y-6">
           <h2 className="text-2xl font-bold text-white mb-6" data-testid="login-title">Welcome Back</h2>
+
+          {notice && (
+            <div
+              className={`px-4 py-3 rounded-xl text-sm ${
+                notice.type === 'success'
+                  ? 'bg-emerald-500/10 border border-emerald-500/40 text-emerald-200'
+                  : notice.type === 'error'
+                    ? 'bg-red-500/10 border border-red-500/40 text-red-200'
+                    : 'bg-indigo-500/10 border border-indigo-500/40 text-indigo-100'
+              }`}
+            >
+              {notice.message}
+            </div>
+          )}
           
           {error && (
             <div className="bg-red-500/10 border border-red-500/50 text-red-400 px-4 py-3 rounded-lg mb-6" data-testid="login-error">
@@ -67,7 +99,7 @@ const LoginPage = ({ onLogin }) => {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
-                className="bg-[#0f0f1a] border-gray-700 text-white placeholder:text-gray-500 focus:border-purple-500 h-12"
+                className="bg-[#05060d]/70 border-gray-800 text-white placeholder:text-gray-500 focus:border-purple-400 focus:ring-2 focus:ring-purple-500/40 focus:ring-offset-2 focus:ring-offset-[#111328] h-12 transition"
               />
             </div>
 
@@ -81,38 +113,36 @@ const LoginPage = ({ onLogin }) => {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
-                className="bg-[#0f0f1a] border-gray-700 text-white placeholder:text-gray-500 focus:border-purple-500 h-12"
+                className="bg-[#05060d]/70 border-gray-800 text-white placeholder:text-gray-500 focus:border-purple-400 focus:ring-2 focus:ring-purple-500/40 focus:ring-offset-2 focus:ring-offset-[#111328] h-12 transition"
               />
             </div>
+
+            {forgotPasswordEnabled && (
+              <div className="flex justify-end">
+                <Link
+                  to="/forgot-password"
+                  className="text-sm font-medium text-purple-300 hover:text-purple-200 transition"
+                >
+                  Forgot password?
+                </Link>
+              </div>
+            )}
 
             <Button
               type="submit"
               data-testid="login-submit-button"
               disabled={loading}
-              className="w-full bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white font-semibold h-12 rounded-lg"
+              className="w-full bg-gradient-to-r from-purple-500 via-pink-500 to-orange-400 hover:shadow-[0_10px_40px_rgba(168,85,247,0.35)] text-white font-semibold h-12 rounded-xl transition"
             >
               {loading ? 'Signing In...' : 'Sign In'}
             </Button>
           </form>
 
-          {/* Demo Credentials */}
-          {/* <div className="mt-6 p-4 bg-purple-500/10 border border-purple-500/30 rounded-lg">
-            <p className="text-sm text-gray-400 mb-2 font-semibold">Demo Credentials:</p>
-            <div className="text-xs text-gray-500 space-y-1">
-              <p>Admin: admin@ticklegram.com / admin123</p>
-              <p>Agent: agent1@ticklegram.com / agent123</p>
+          {!allowPublicSignup && (
+            <div className="text-center text-sm text-gray-400">
+              Access is restricted. Contact your workspace admin for an account.
             </div>
-          </div> */}
-
-          {/* Signup Link */}
-          <div className="mt-6 text-center">
-            <p className="text-sm text-gray-400">
-              Don't have an account?{' '}
-              <Link to="/signup" className="text-purple-400 hover:text-purple-300 font-semibold">
-                Sign Up
-              </Link>
-            </p>
-          </div>
+          )}
         </div>
       </div>
     </div>
