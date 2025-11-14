@@ -29,6 +29,52 @@
 - `.dashboard-page`, `.dashboard-header`, and `.dashboard-main` split vertical space so sections such as stats cards + filters remain visible while the workspace flexes.
 - `.chat-scroll` (shared by chat lists and comment columns) sets consistent thin-scrollbar behaviour across modules.
 
+## Sidebar & light-mode polish (latest pass)
+
+### Sidebar user card & logout
+- Desktop sidebar stays collapsed by default (icon rail). Only the theme toggle icon + avatar chip remain visible in this state.
+- Hovering (or opening the mobile sheet) renders the expanded panel that shows avatar, name, role label, and a guarded logout button.
+- Logout is only focusable/clickable in the expanded state and fires the existing confirmation dialog before signing out.
+
+### Light mode contrast fixes
+- **Outgoing agent bubbles:** light theme now forces dark slate text/timestamps so gradients remain readable, while dark mode keeps the original white text.
+- **Templates table pills:** category/platform badges use a dedicated `.template-pill` class with higher-contrast text/borders in light mode without affecting dark mode styling.
+- **Positions / Role manager:** description copy uses `.position-description`, permission chips use `.position-permission-pill`, and the “System” badge reuses `.position-system-badge` to keep their text legible on pale surfaces in light mode.
+
+### Comments – compact “Recent Comments” panel
+- Reduced header padding and tightened the search input to a 36px control (`.comments-filter-input`) so more comment rows remain above the fold.
+- Each recent-comment row now uses smaller vertical padding, denser avatar spacing, and smaller secondary text so the column fits more content without losing clarity.
+- All interactions (selection highlight, scroll behaviour, Reply/Message actions) continue to rely on the existing data/handlers; only spacing and utility classes changed.
+
+### Files touched in this pass
+- `src/layouts/AppShell.jsx`
+- `src/components/SocialComments.js`
+- `src/components/TemplateManager.js`
+- `src/components/PositionManager.jsx`
+- `src/App.css`
+- `docs/UI-Refactor-Modules.md`
+
+### UI-only changelog (latest pass)
+- Sidebar collapse state now hides the logout control entirely until the flyout is visible, preventing confusing “dead” icons.
+- Light-mode readability improved for agent messages, templates pills, and positions metadata without changing dark-mode colours.
+- Recent Comments column in the Comments layout is denser, exposing more comment rows before scrolling while keeping the same scroll/selection behaviour.
+
+## Comments polish (latest pass)
+
+### Column radius & overflow
+- `.comments-column` now applies `overflow: hidden` so highlighted rows and scroll content stay clipped inside the rounded shell in both themes. This prevents light-mode gradients from bleeding past the curved edges.
+
+### Preview close control
+- The redundant close icon in the preview column header was removed (Option B); the column remains visible, and mobile users can continue to toggle the profile panel from the thread header button.
+
+### Files touched
+- `src/App.css`
+- `src/components/SocialComments.js`
+
+### UI-only changelog
+- Comments columns now clip their content to the rounded container, fixing the light-mode overflow artefact.
+- Removed the non-functional close button from the preview pane to avoid confusing behaviour; the mobile toggle remains available through the thread header action.
+
 ## Files created
 - `src/layouts/InboxLayout.jsx`
 - `src/layouts/InboxWorkspace.jsx`
@@ -48,6 +94,7 @@
 - `src/components/ChatSidebar.js`
 - `src/components/UserRosterCard.jsx`
 - `src/components/PositionManager.jsx`
+- `src/components/TemplateManager.js`
 - `src/pages/UserDirectoryPage.jsx`
 - `src/pages/PositionsPage.jsx`
 - `src/utils/navigationConfig.js`

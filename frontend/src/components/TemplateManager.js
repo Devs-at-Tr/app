@@ -320,12 +320,12 @@ const TemplateManager = () => {
                     {template.content}
                   </TableCell>
                   <TableCell>
-                    <Badge variant="outline" className="border-gray-600">
+                    <Badge variant="outline" className="template-pill">
                       {template.category}
                     </Badge>
                   </TableCell>
                   <TableCell>
-                    <Badge variant="outline" className="border-gray-600">
+                    <Badge variant="outline" className="template-pill">
                       {template.platform}
                     </Badge>
                   </TableCell>

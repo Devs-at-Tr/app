@@ -68,6 +68,31 @@ const AppShell = ({ user, navItems = [], onLogout, children }) => {
     return `https://ui-avatars.com/api/?name=${encoded}&background=4b5563&color=ffffff`;
   }, [user]);
 
+  const renderAvatar = (sizeClass = 'w-10 h-10') => {
+    if (avatarUrl) {
+      return (
+        <img
+          src={avatarUrl}
+          alt={user?.name}
+          className={cn(
+            sizeClass,
+            'rounded-full object-cover border border-[var(--tg-border-soft)]'
+          )}
+        />
+      );
+    }
+    return (
+      <div
+        className={cn(
+          sizeClass,
+          'rounded-full bg-[var(--tg-accent-strong)] text-white flex items-center justify-center text-sm font-semibold'
+        )}
+      >
+        {initials}
+      </div>
+    );
+  };
+
   const renderLogoutButton = ({ className = '', showLabel = false }) => (
     <AlertDialog>
       <AlertDialogTrigger asChild>
@@ -152,7 +177,12 @@ const AppShell = ({ user, navItems = [], onLogout, children }) => {
   );
 
   const SidebarContent = (expanded) => (
-    <div className={cn('flex flex-col h-full px-3 py-6', expanded ? 'app-sidebar-expanded' : 'app-sidebar-collapsed')}>
+    <div
+      className={cn(
+        'flex flex-col h-full px-3 py-6',
+        expanded ? 'app-sidebar-expanded' : 'app-sidebar-collapsed'
+      )}
+    >
       <div className={cn('flex items-center gap-3', !expanded && 'justify-center')}>
         <img src="/favicon.png" alt="TickleGram" className="w-10 h-10 rounded-xl" />
         {expanded && (
@@ -167,46 +197,30 @@ const AppShell = ({ user, navItems = [], onLogout, children }) => {
         <Button
           variant="ghost"
           onClick={toggleTheme}
-          className={cn(
-            'w-full app-sidebar-toggle',
-            expanded ? 'justify-between' : 'justify-center'
-          )}
+          className={cn('w-full app-sidebar-toggle', expanded ? 'justify-between' : 'justify-center')}
         >
           <div className="flex items-center gap-2">
             {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
             {expanded && <span>{theme === 'dark' ? 'Light mode' : 'Dark mode'}</span>}
           </div>
         </Button>
-        <div
-          className={cn(
-            'flex items-center gap-3 rounded-2xl bg-[var(--tg-surface-muted)] border border-[var(--tg-border-soft)]',
-            expanded ? 'p-3' : 'p-2 flex-col'
-          )}
-        >
-          {avatarUrl ? (
-            <img src={avatarUrl} alt={user?.name} className="w-10 h-10 rounded-full object-cover" />
-          ) : (
-            <div className="w-10 h-10 rounded-full bg-[var(--tg-accent-strong)] text-white flex items-center justify-center text-sm font-semibold">
-              {initials}
+        {expanded ? (
+          <div className="flex items-center gap-3 rounded-2xl bg-[var(--tg-surface-muted)] border border-[var(--tg-border-soft)] p-3">
+            {renderAvatar()}
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold truncate">{user?.name}</p>
+              <p className="text-xs text-[var(--tg-text-muted)] truncate">{roleLabel}</p>
             </div>
-          )}
-          {expanded && (
-            <>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold truncate">{user?.name}</p>
-                <p className="text-xs text-[var(--tg-text-muted)] truncate">{roleLabel}</p>
-              </div>
-              {renderLogoutButton({
-                className: 'text-[var(--tg-accent-strong)] hover:text-[var(--tg-accent-strong)]/80',
-                showLabel: true
-              })}
-            </>
-          )}
-          {!expanded && renderLogoutButton({
-            className: 'text-[var(--tg-accent-strong)] hover:text-[var(--tg-accent-strong)]/80',
-            showLabel: false
-          })}
-        </div>
+            {renderLogoutButton({
+              className: 'text-[var(--tg-accent-strong)] hover:text-[var(--tg-accent-strong)]/80',
+              showLabel: true
+            })}
+          </div>
+        ) : (
+          <div className="flex items-center justify-center rounded-2xl bg-[var(--tg-surface-muted)] border border-[var(--tg-border-soft)] p-3">
+            {renderAvatar('w-12 h-12')}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -219,14 +233,11 @@ const AppShell = ({ user, navItems = [], onLogout, children }) => {
         onMouseLeave={() => setSidebarExpanded(false)}
       >
         {SidebarContent(false)}
-        <div
-          className={cn(
-            'app-sidebar-flyout transition-all duration-300 ease-out',
-            isSidebarExpanded ? 'opacity-100 translate-x-0 pointer-events-auto' : 'opacity-0 -translate-x-4 pointer-events-none'
-          )}
-        >
-          {SidebarContent(true)}
-        </div>
+        {isSidebarExpanded && (
+          <div className="app-sidebar-flyout transition-all duration-300 ease-out opacity-100 translate-x-0 pointer-events-auto">
+            {SidebarContent(true)}
+          </div>
+        )}
       </aside>
 
       <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>

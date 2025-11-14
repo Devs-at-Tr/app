@@ -222,16 +222,16 @@ const PositionManager = () => {
                           <p className="text-base font-semibold text-white">{position.name}</p>
                           <p className="text-xs text-gray-500">{position.slug}</p>
                         </div>
-                        {position.is_system && <Badge className="bg-gray-700 text-gray-200">System</Badge>}
+                        {position.is_system && <Badge className="position-system-badge">System</Badge>}
                       </div>
-                      <p className="text-sm text-gray-400 mt-2 line-clamp-2">
+                      <p className="position-description text-sm mt-2 line-clamp-2">
                         {position.description || 'No description provided.'}
                       </p>
                       <div className="mt-3 flex flex-wrap gap-1">
                         {(position.permissions || []).slice(0, 6).map((permission) => (
                           <span
                             key={permission}
-                            className="bg-purple-500/10 text-purple-200 text-[11px] px-2 py-0.5 rounded-full"
+                            className="position-permission-pill text-[11px] px-2 py-0.5 rounded-full"
                           >
                             {permission}
                           </span>

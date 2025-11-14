@@ -10,6 +10,7 @@ import { Instagram, Facebook, ExternalLink, MessageCircle, Send, UserCircle, X }
 import { Badge } from './ui/badge';
 import { useIsMobile } from '../hooks/useMediaQuery';
 import CommentsLayout from '../layouts/CommentsLayout';
+import { cn } from '../lib/utils';
 
 const SUPPORTED_CHANNELS = ['instagram', 'facebook'];
 
@@ -25,23 +26,25 @@ const PostPreview = ({ post }) => {
   const isVideo = post.media_type === 'VIDEO' || post.media_type === 'REEL';
 
   return (
-    <Card className="bg-[#1a1a2e] border border-gray-800 overflow-hidden mb-3">
-      <div className="flex items-start gap-3 p-4 border-b border-gray-800">
+    <Card className="bg-[var(--tg-surface)] border border-[var(--tg-border-soft)] overflow-hidden mb-3 shadow-card">
+      <div className="flex items-start gap-3 p-4 border-b border-[var(--tg-border-soft)]">
         <Avatar className="w-10 h-10">
           <img
             src={post.profile_pic || `https://ui-avatars.com/api/?name=${post.username || 'IG'}`}
             alt={post.username || 'Post Author'}
           />
         </Avatar>
-        <div className="flex-1">
-          <p className="text-white font-semibold">{post.username || 'Unknown'}</p>
-          <p className="text-xs text-gray-400">{formatTimestamp(post.timestamp)}</p>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold text-[var(--tg-text-primary)] truncate">
+            {post.username || 'Unknown'}
+          </p>
+          <p className="text-xs text-[var(--tg-text-muted)]">{formatTimestamp(post.timestamp)}</p>
         </div>
         {post.permalink && (
           <Button
             variant="ghost"
             size="icon"
-            className="text-gray-400 hover:text-gray-200"
+            className="text-[var(--tg-text-muted)] hover:text-[var(--tg-text-primary)]"
             onClick={() => window.open(post.permalink, '_blank')}
             aria-label="Open post in new tab"
           >
@@ -49,9 +52,9 @@ const PostPreview = ({ post }) => {
           </Button>
         )}
       </div>
-      <div className="relative aspect-square bg-black/30">
+      <div className="relative aspect-square bg-[var(--tg-surface-muted)]">
         {isVideo ? (
-          <div className="absolute inset-0 flex items-center justify-center text-gray-300">
+          <div className="absolute inset-0 flex items-center justify-center text-[var(--tg-text-muted)]">
             <MessageCircle className="h-10 w-10 opacity-50" />
           </div>
         ) : (
@@ -59,8 +62,8 @@ const PostPreview = ({ post }) => {
         )}
       </div>
       {post.caption && (
-        <div className="p-4 border-t border-gray-800">
-          <p className="text-sm text-gray-200 whitespace-pre-line">{post.caption}</p>
+        <div className="p-4 border-t border-[var(--tg-border-soft)]">
+          <p className="text-sm text-[var(--tg-text-secondary)] whitespace-pre-line">{post.caption}</p>
         </div>
       )}
     </Card>
@@ -72,11 +75,14 @@ const CommentListItem = ({ comment, isActive, onSelect }) => {
     <button
       type="button"
       onClick={onSelect}
-      className={`w-full text-left rounded-xl border border-transparent px-3 py-3 transition-colors ${
-        isActive ? 'bg-gradient-to-r from-purple-600/10 to-pink-600/10 border-purple-500/50' : 'hover:bg-[#1f1f2f]'
-      }`}
+      className={cn(
+        'w-full text-left rounded-2xl border border-transparent px-3 py-2.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--tg-accent-soft)]',
+        isActive
+          ? 'bg-gradient-to-r from-purple-600/10 to-pink-600/10 border-purple-500/50'
+          : 'hover:bg-[var(--tg-chat-hover)]'
+      )}
     >
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-2.5">
         <Avatar className="w-10 h-10 shrink-0">
           <img
             src={comment.profile_pic || `https://ui-avatars.com/api/?name=${comment.username}`}
@@ -85,10 +91,16 @@ const CommentListItem = ({ comment, isActive, onSelect }) => {
         </Avatar>
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between gap-2">
-            <p className="text-sm font-semibold text-white truncate">{comment.username}</p>
-            <span className="text-[11px] text-gray-500 whitespace-nowrap">{formatTimestamp(comment.timestamp)}</span>
+            <p className="text-sm font-semibold text-[var(--tg-text-primary)] truncate">
+              {comment.username}
+            </p>
           </div>
-          <p className="mt-1 text-xs text-gray-400 truncate">{comment.text || 'No comment text'}</p>
+          <p className="mt-0.5 text-[11px] text-[var(--tg-text-secondary)] truncate">
+            {comment.text || 'No comment text'}
+          </p>
+          <p className="text-[10px] text-[var(--tg-text-muted)] mt-0.5 whitespace-nowrap">
+            {formatTimestamp(comment.timestamp)}
+          </p>
         </div>
       </div>
     </button>
@@ -101,7 +113,7 @@ const ThreadMessage = ({ message, onReply, onMessage }) => {
   }
 
   return (
-    <div className="flex items-start gap-3 py-3 border-b border-gray-800 last:border-b-0">
+    <div className="flex items-start gap-3 py-3 border-b border-[var(--tg-border-soft)] last:border-b-0">
       <Avatar className="w-10 h-10">
         <img
           src={message.profile_pic || `https://ui-avatars.com/api/?name=${message.username || 'User'}`}
@@ -110,17 +122,29 @@ const ThreadMessage = ({ message, onReply, onMessage }) => {
       </Avatar>
       <div className="flex-1 min-w-0">
         <div className="flex items-center justify-between gap-3">
-          <p className="text-sm font-semibold text-white truncate">{message.username || 'Unknown'}</p>
-          <span className="text-xs text-gray-500 whitespace-nowrap">{formatTimestamp(message.timestamp)}</span>
+          <p className="text-sm font-semibold text-[var(--tg-text-primary)] truncate">
+            {message.username || 'Unknown'}
+          </p>
+          <span className="text-xs text-[var(--tg-text-muted)] whitespace-nowrap">
+            {formatTimestamp(message.timestamp)}
+          </span>
         </div>
-        <p className="mt-2 text-sm text-gray-200 whitespace-pre-line">
+        <p className="mt-2 text-sm text-[var(--tg-text-primary)] whitespace-pre-line">
           {message.text || 'No comment text provided.'}
         </p>
-        <div className="flex flex-wrap items-center gap-4 text-xs text-gray-400 mt-2">
-          <button type="button" onClick={() => onReply?.(message.id)} className="hover:text-purple-300">
+        <div className="flex flex-wrap items-center gap-4 text-xs text-[var(--tg-text-muted)] mt-2">
+          <button
+            type="button"
+            onClick={() => onReply?.(message.id)}
+            className="hover:text-[var(--tg-accent-strong)]"
+          >
             Reply
           </button>
-          <button type="button" onClick={() => onMessage?.(message.id)} className="hover:text-purple-300">
+          <button
+            type="button"
+            onClick={() => onMessage?.(message.id)}
+            className="hover:text-[var(--tg-accent-strong)]"
+          >
             Message
           </button>
         </div>
@@ -338,7 +362,7 @@ const SocialComments = ({ selectedPlatform = 'all' }) => {
     return (
       <div className="flex-1 flex flex-col min-h-0">
         <div className="space-y-3">
-          <div className="bg-[#181828] border border-gray-800 rounded-xl p-4">
+          <div className="bg-[var(--tg-surface)] border border-[var(--tg-border-soft)] rounded-2xl p-4 shadow-card">
             <div className="flex items-start justify-between gap-3">
               <div className="flex items-start gap-3 flex-1">
                 <Avatar className="w-10 h-10">
@@ -348,30 +372,36 @@ const SocialComments = ({ selectedPlatform = 'all' }) => {
                   />
                 </Avatar>
                 <div className="min-w-0">
-                  <p className="text-sm font-semibold text-white truncate">{selectedThread.username}</p>
-                  <p className="text-xs text-gray-500 mt-1">{formatTimestamp(selectedThread.timestamp)}</p>
+                  <p className="text-sm font-semibold text-[var(--tg-text-primary)] truncate">
+                    {selectedThread.username}
+                  </p>
+                  <p className="text-xs text-[var(--tg-text-muted)] mt-1">
+                    {formatTimestamp(selectedThread.timestamp)}
+                  </p>
                 </div>
               </div>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="text-gray-400 hover:text-gray-100"
-                onClick={toggleProfilePanel}
-                aria-label={isProfileOpen ? 'Hide profile' : 'Show profile'}
-              >
-                {isProfileOpen ? <X className="h-4 w-4" /> : <UserCircle className="h-4 w-4" />}
-              </Button>
+              {isMobile && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="text-[var(--tg-text-muted)] hover:text-[var(--tg-text-primary)]"
+                  onClick={toggleProfilePanel}
+                  aria-label={isProfileOpen ? 'Hide profile' : 'Show profile'}
+                >
+                  {isProfileOpen ? <X className="h-4 w-4" /> : <UserCircle className="h-4 w-4" />}
+                </Button>
+              )}
             </div>
-            <p className="mt-3 text-sm text-gray-200 whitespace-pre-line">
+            <p className="mt-3 text-sm text-[var(--tg-text-secondary)] whitespace-pre-line">
               {selectedThread.text || 'No comment text provided.'}
             </p>
           </div>
 
           {postSummary && (
-            <div className="bg-[#101023] border border-gray-800 rounded-xl p-4 flex gap-3 items-start">
+            <div className="bg-[var(--tg-surface)] border border-[var(--tg-border-soft)] rounded-2xl p-4 flex gap-3 items-start shadow-card">
               {postSummary.media_url && (
-                <div className="w-16 h-16 rounded-lg bg-black/20 overflow-hidden flex-shrink-0">
+                <div className="w-16 h-16 rounded-xl bg-[var(--tg-surface-muted)] overflow-hidden flex-shrink-0">
                   <img
                     src={postSummary.media_url}
                     alt={postSummary.caption || 'Post media'}
@@ -380,13 +410,15 @@ const SocialComments = ({ selectedPlatform = 'all' }) => {
                 </div>
               )}
               <div className="flex-1 min-w-0">
-                <p className="text-xs uppercase text-gray-500">Post</p>
-                <p className="text-sm font-semibold text-white">
+                <p className="text-xs uppercase tracking-wide text-[var(--tg-text-muted)]">Post</p>
+                <p className="text-sm font-semibold text-[var(--tg-text-primary)]">
                   {postSummary.username || selectedThread.username}
                 </p>
-                <p className="text-xs text-gray-500">{formatTimestamp(postSummary.timestamp || selectedThread.timestamp)}</p>
+                <p className="text-xs text-[var(--tg-text-muted)]">
+                  {formatTimestamp(postSummary.timestamp || selectedThread.timestamp)}
+                </p>
                 {postSummary.caption && (
-                  <p className="text-sm text-gray-300 mt-2 whitespace-pre-line">
+                  <p className="text-sm text-[var(--tg-text-secondary)] mt-2 whitespace-pre-line">
                     {postSummary.caption}
                   </p>
                 )}
@@ -400,7 +432,6 @@ const SocialComments = ({ selectedPlatform = 'all' }) => {
             <CommentProfilePanel
               thread={selectedThread}
               totalReplies={replies.length}
-              onClose={toggleProfilePanel}
               isMobile
               platform={activeTab}
             />
@@ -409,7 +440,7 @@ const SocialComments = ({ selectedPlatform = 'all' }) => {
 
         <div className="flex-1 min-h-0 overflow-y-auto space-y-1 pr-1 mt-4">
           {threadMessages.length === 0 ? (
-            <div className="text-center text-xs text-gray-500 py-8">No comments yet.</div>
+            <div className="text-center text-xs text-[var(--tg-text-muted)] py-8">No comments yet.</div>
           ) : (
             threadMessages.map((message) => (
               <ThreadMessage
@@ -422,18 +453,18 @@ const SocialComments = ({ selectedPlatform = 'all' }) => {
           )}
         </div>
 
-        <div className="pt-3 border-t border-gray-800 mt-3">
+        <div className="pt-3 border-t border-[var(--tg-border-soft)] mt-3">
           <div className="flex items-center justify-between mb-2">
-            <p className="text-xs text-gray-400">
+            <p className="text-xs text-[var(--tg-text-muted)]">
               Replying to{' '}
-              <span className="text-pink-400">
+              <span className="text-[var(--tg-accent-strong)]">
                 {replyTarget?.username || selectedThread.username}
               </span>
             </p>
             <Button
               variant="ghost"
               size="sm"
-              className="text-gray-500 hover:text-gray-300"
+              className="text-[var(--tg-text-muted)] hover:text-[var(--tg-text-primary)]"
               onClick={() => {
                 setReplyTarget(selectedThread);
                 setReplyText('');
@@ -447,7 +478,7 @@ const SocialComments = ({ selectedPlatform = 'all' }) => {
               value={replyText}
               onChange={(event) => setReplyText(event.target.value)}
               placeholder="Write a reply..."
-              className="bg-[#0f0f1a] border-gray-700 text-white"
+              className="bg-[var(--tg-surface-muted)] border-[var(--tg-border-soft)] text-[var(--tg-text-primary)] placeholder:text-[var(--tg-text-muted)]"
             />
             <Button
               onClick={handleSendReply}
@@ -463,26 +494,31 @@ const SocialComments = ({ selectedPlatform = 'all' }) => {
   };
 
   const renderList = () => (
-    <div className="flex flex-col h-full bg-[#1a1a2e] border border-gray-800 rounded-xl">
-      <div className="p-4 border-b border-gray-800 space-y-3">
+    <div className="flex flex-col h-full bg-[var(--tg-surface)] border border-[var(--tg-border-soft)] rounded-2xl shadow-card">
+      <div className="p-3 border-b border-[var(--tg-border-soft)] space-y-2.5">
         <div className="flex items-center justify-between">
-          <p className="text-sm font-semibold text-white flex items-center gap-2">
-            {activeTab === 'facebook' ? <Facebook className="h-4 w-4 text-blue-400" /> : <Instagram className="h-4 w-4 text-pink-400" />}
+          <p className="text-sm font-semibold text-[var(--tg-text-primary)] flex items-center gap-2">
+            {activeTab === 'facebook' ? (
+              <Facebook className="h-4 w-4 text-blue-500" />
+            ) : (
+              <Instagram className="h-4 w-4 text-pink-500" />
+            )}
             Recent Comments
           </p>
-          <span className="text-xs text-gray-500">{currentComments.length} total</span>
+          <span className="text-xs text-[var(--tg-text-muted)]">{currentComments.length} total</span>
         </div>
         <Input
           value={search}
           onChange={(event) => setSearch(event.target.value)}
           placeholder="Search comments..."
-          className="bg-[#0f0f1a] border-gray-700 text-sm text-white"
+          className="comments-filter-input text-sm"
+          aria-label="Search comments"
         />
       </div>
       <ScrollArea className="flex-1">
-        <div className="p-2 space-y-2">
+        <div className="px-2 py-1.5 space-y-1.5">
           {currentComments.length === 0 ? (
-            <div className="py-10 text-center text-xs text-gray-500">No comments yet</div>
+            <div className="py-10 text-center text-xs text-[var(--tg-text-muted)]">No comments yet</div>
           ) : (
             currentComments.map((comment) => (
               <CommentListItem
@@ -501,12 +537,12 @@ const SocialComments = ({ selectedPlatform = 'all' }) => {
   const renderPreview = () => {
     if (!selectedThread) {
       return (
-        <div className="h-full min-h-0 rounded-3xl border border-gray-800 bg-[#101023] flex items-center justify-center text-sm text-gray-500">
+        <div className="h-full min-h-0 rounded-3xl border border-[var(--tg-border-soft)] bg-[var(--tg-surface)] flex items-center justify-center text-sm text-[var(--tg-text-muted)] text-center px-4">
           Select a comment to view post details
         </div>
       );
     }
-    
+
     return (
       <div className="h-full min-h-0">
         <CommentProfilePanel
@@ -546,16 +582,7 @@ const SocialComments = ({ selectedPlatform = 'all' }) => {
     setActiveTab(tabId);
   };
 
-  const previewColumn =
-    isMobile
-      ? null
-      : isProfileOpen
-        ? renderPreview()
-        : (
-          <div className="h-full min-h-0 rounded-3xl border border-gray-800 bg-[#101023] flex items-center justify-center text-sm text-gray-500">
-            Open “View details” to preview the post
-          </div>
-        );
+  const previewColumn = isMobile ? null : renderPreview();
 
   return (
     <CommentsLayout
@@ -564,7 +591,7 @@ const SocialComments = ({ selectedPlatform = 'all' }) => {
       onTabChange={handleTabChange}
       postsColumn={renderList()}
       threadColumn={
-        <div className="bg-[#1a1a2e] border border-gray-800 rounded-3xl p-4 flex flex-col h-full min-h-0">
+        <div className="bg-[var(--tg-surface)] border border-[var(--tg-border-soft)] rounded-3xl p-4 flex flex-col h-full min-h-0 shadow-card">
           {renderThread()}
         </div>
       }
@@ -575,7 +602,7 @@ const SocialComments = ({ selectedPlatform = 'all' }) => {
 
 export default SocialComments;
 
-const CommentProfilePanel = ({ thread, totalReplies, onClose, isMobile = false, platform }) => {
+const CommentProfilePanel = ({ thread, totalReplies, isMobile = false, platform }) => {
   if (!thread) {
     return null;
   }
@@ -586,12 +613,12 @@ const CommentProfilePanel = ({ thread, totalReplies, onClose, isMobile = false, 
 
   const platformBadgeClass =
     platformLabel === 'Facebook'
-      ? 'bg-blue-500/15 text-blue-300 border border-blue-500/40'
-      : 'bg-pink-500/15 text-pink-300 border border-pink-500/40';
+      ? 'bg-blue-500/15 text-blue-600 border border-blue-500/30'
+      : 'bg-pink-500/15 text-pink-500 border border-pink-500/30';
 
   const containerClasses = isMobile
-    ? 'bg-[#181828] border border-gray-800 rounded-xl p-4'
-    : 'bg-[#101023] border border-gray-800 rounded-xl h-full flex flex-col p-4';
+    ? 'bg-[var(--tg-surface)] border border-[var(--tg-border-soft)] rounded-2xl p-4'
+    : 'bg-[var(--tg-surface)] border border-[var(--tg-border-soft)] rounded-3xl h-full flex flex-col p-4 overflow-y-auto shadow-card';
 
   const infoItems = [
     { label: 'Comment ID', value: thread.id },
@@ -618,62 +645,56 @@ const CommentProfilePanel = ({ thread, totalReplies, onClose, isMobile = false, 
             />
           </Avatar>
           <div>
-            <p className="text-base font-semibold text-white">@{thread.username}</p>
+            <p className="text-base font-semibold text-[var(--tg-text-primary)]">@{thread.username}</p>
             <div className="flex items-center gap-2 mt-1">
               <Badge className={platformBadgeClass}>{platformLabel}</Badge>
-              <span className="text-xs text-gray-500">{formatTimestamp(thread.timestamp)}</span>
+              <span className="text-xs text-[var(--tg-text-muted)]">
+                {formatTimestamp(thread.timestamp)}
+              </span>
             </div>
           </div>
         </div>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className="text-gray-500 hover:text-gray-200"
-          onClick={onClose}
-          aria-label="Close profile"
-        >
-          <X className="h-4 w-4" />
-        </Button>
       </div>
 
       <div className="mt-4 space-y-4">
+        {thread.post && (
+          <div>
+            <p className="text-xs uppercase text-[var(--tg-text-muted)] tracking-wide mb-2">
+              Associated Post
+            </p>
+            <PostPreview post={thread.post} />
+          </div>
+        )}
+
         <div>
-          <p className="text-xs uppercase text-gray-500 tracking-wide mb-1">Comment</p>
-          <p className="text-sm text-gray-200 whitespace-pre-line">
+          <p className="text-xs uppercase text-[var(--tg-text-muted)] tracking-wide mb-1">Comment</p>
+          <p className="text-sm text-[var(--tg-text-secondary)] whitespace-pre-line">
             {thread.text || 'No comment text provided.'}
           </p>
         </div>
 
         <div>
-          <p className="text-xs uppercase text-gray-500 tracking-wide mb-2">Details</p>
+          <p className="text-xs uppercase text-[var(--tg-text-muted)] tracking-wide mb-2">Details</p>
           <div className="space-y-2">
             {infoItems.map((item) => (
               <div key={item.label}>
-                <p className="text-[11px] uppercase text-gray-500">{item.label}</p>
+                <p className="text-[11px] uppercase text-[var(--tg-text-muted)]">{item.label}</p>
                 {item.isLink ? (
                   <a
                     href={item.value}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-sm text-purple-300 hover:text-purple-200 break-all"
+                    className="text-sm text-[var(--tg-accent-strong)] hover:underline break-all"
                   >
                     Open post in new tab
                   </a>
                 ) : (
-                  <p className="text-sm text-gray-200 break-all">{item.value}</p>
+                  <p className="text-sm text-[var(--tg-text-primary)] break-all">{item.value}</p>
                 )}
               </div>
             ))}
           </div>
         </div>
-
-        {thread.post && (
-          <div>
-            <p className="text-xs uppercase text-gray-500 tracking-wide mb-2">Associated Post</p>
-            <PostPreview post={thread.post} />
-          </div>
-        )}
       </div>
     </div>
   );
