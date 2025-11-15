@@ -3,7 +3,7 @@ from starlette.websockets import WebSocketState
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import func
+from sqlalchemy import func, text
 from sqlalchemy.exc import IntegrityError
 from typing import List, Optional, Set, Dict, Any, Tuple, Type, Union
 from websocket_manager import manager as ws_manager
@@ -47,7 +47,9 @@ from models import (
     InstagramMarketingEvent,
     InstagramInsight,
     InstagramInsightScope,
-    PasswordResetToken
+    PasswordResetToken,
+    DBSchemaSnapshot,
+    DBSchemaChange
 )
 from schemas import (
     UserRegister, UserLogin, UserResponse, TokenResponse,
@@ -75,7 +77,8 @@ from schemas import (
     ForgotPasswordRequest,
     ResetPasswordRequest,
     AdminUserCreate,
-    AuthConfigResponse
+    AuthConfigResponse,
+    DatabaseOverviewResponse
 )
 from auth import verify_password, get_password_hash, create_access_token, decode_access_token
 from facebook_api import facebook_client, FacebookMode
@@ -411,6 +414,436 @@ def _send_password_reset_email(email: str, name: Optional[str], reset_url: str) 
         logger.warning("Password reset email not sent (check SMTP config). Recipient=%s", email)
 
 
+def _humanize_bytes(num_bytes: Optional[int]) -> str:
+    value = float(num_bytes or 0)
+    units = ["B", "KB", "MB", "GB", "TB"]
+    idx = 0
+    while value >= 1024 and idx < len(units) - 1:
+        value /= 1024
+        idx += 1
+    return f"{value:.2f} {units[idx]}"
+
+
+def _get_schema_name(db: Session) -> Optional[str]:
+    bind = db.get_bind()
+    if not bind:
+        return None
+    dialect = bind.dialect.name.lower()
+    if dialect not in {"mysql"}:
+        return None
+    try:
+        return db.execute(text("SELECT DATABASE()")).scalar()
+    except Exception as exc:
+        logger.warning("Unable to resolve database schema name: %s", exc)
+        return None
+
+
+def _collect_database_overview(db: Session) -> Dict[str, Any]:
+    schema_name = _get_schema_name(db)
+    summary: Dict[str, Any] = {
+        "database_name": schema_name,
+        "table_count": 0,
+        "total_rows": 0,
+        "data_size_bytes": 0,
+        "index_size_bytes": 0,
+        "total_size_bytes": 0,
+        "total_size_readable": "0 B",
+        "metadata_supported": bool(schema_name),
+        "info_message": None,
+        "last_update": None,
+    }
+    empty_payload = {
+        "summary": summary,
+        "tables": [],
+        "relationships": [],
+        "storage": {
+            "total_size_bytes": 0,
+            "total_size_readable": "0 B",
+            "top_tables": [],
+        },
+        "schema_structure": None,
+    }
+    if not schema_name:
+        summary["info_message"] = "Schema metadata is only available when connected to MySQL."
+        return empty_payload
+
+    try:
+        tables_result = db.execute(
+            text(
+                """
+                SELECT
+                    table_name AS tbl_name,
+                    table_rows AS tbl_rows,
+                    data_length AS data_len,
+                    index_length AS idx_len,
+                    create_time AS tbl_create_time,
+                    update_time AS tbl_update_time
+                FROM information_schema.TABLES
+                WHERE table_schema = :schema
+                ORDER BY table_name ASC
+                """
+            ),
+            {"schema": schema_name},
+        ).mappings().all()
+
+        columns_result = db.execute(
+            text(
+                """
+                SELECT
+                    table_name AS tbl_name,
+                    column_name AS col_name,
+                    ordinal_position AS col_position,
+                    column_type AS col_type,
+                    is_nullable AS col_nullable,
+                    column_default AS col_default,
+                    extra AS col_extra,
+                    column_key AS col_key
+                FROM information_schema.COLUMNS
+                WHERE table_schema = :schema
+                ORDER BY table_name, ordinal_position
+                """
+            ),
+            {"schema": schema_name},
+        ).mappings().all()
+
+        fk_result = db.execute(
+            text(
+                """
+                SELECT
+                    table_name AS fk_table,
+                    column_name AS fk_column,
+                    referenced_table_name AS fk_ref_table,
+                    referenced_column_name AS fk_ref_column,
+                    constraint_name AS fk_name
+                FROM information_schema.KEY_COLUMN_USAGE
+                WHERE table_schema = :schema
+                  AND referenced_table_name IS NOT NULL
+                """
+            ),
+            {"schema": schema_name},
+        ).mappings().all()
+    except Exception as exc:
+        logger.error("Failed to query information_schema: %s", exc)
+        summary["metadata_supported"] = False
+        summary["info_message"] = "Unable to query information_schema for metadata."
+        return empty_payload
+
+    table_map: Dict[str, Dict[str, Any]] = {}
+    last_update: Optional[datetime] = None
+    total_rows = 0
+    total_data = 0
+    total_index = 0
+
+    for row in tables_result:
+        name = row["tbl_name"]
+        rows = int(row["tbl_rows"] or 0)
+        data_len = int(row["data_len"] or 0)
+        index_len = int(row["idx_len"] or 0)
+        create_time = _ensure_timezone_aware(row["tbl_create_time"])
+        update_time = _ensure_timezone_aware(row["tbl_update_time"])
+        if update_time and (last_update is None or update_time > last_update):
+            last_update = update_time
+        elif create_time and (last_update is None or create_time > last_update):
+            last_update = create_time
+        total_rows += rows
+        total_data += data_len
+        total_index += index_len
+        table_map[name] = {
+            "name": name,
+            "rows": rows,
+            "data_size_bytes": data_len,
+            "index_size_bytes": index_len,
+            "total_size_bytes": data_len + index_len,
+            "data_size_readable": _humanize_bytes(data_len),
+            "index_size_readable": _humanize_bytes(index_len),
+            "total_size_readable": _humanize_bytes(data_len + index_len),
+            "create_time": create_time,
+            "update_time": update_time,
+            "columns": [],
+        }
+
+    for column in columns_result:
+        table_name = column["tbl_name"]
+        if table_name not in table_map:
+            continue
+        default_val = column["col_default"]
+        if default_val is not None:
+            default_val = str(default_val)
+        table_map[table_name]["columns"].append(
+            {
+                "name": column["col_name"],
+                "data_type": column["col_type"],
+                "nullable": (column["col_nullable"] or "").upper() == "YES",
+                "default": default_val,
+                "extra": column["col_extra"],
+                "key": column["col_key"],
+            }
+        )
+
+    relationships = [
+        {
+            "table": fk["fk_table"],
+            "column": fk["fk_column"],
+            "references_table": fk["fk_ref_table"],
+            "references_column": fk["fk_ref_column"],
+            "constraint_name": fk["fk_name"],
+        }
+        for fk in fk_result
+        if fk["fk_table"] in table_map
+    ]
+
+    summary.update(
+        {
+            "table_count": len(table_map),
+            "total_rows": total_rows,
+            "data_size_bytes": total_data,
+            "index_size_bytes": total_index,
+            "total_size_bytes": total_data + total_index,
+            "total_size_readable": _humanize_bytes(total_data + total_index),
+            "last_update": last_update,
+        }
+    )
+
+    tables_list = list(table_map.values())
+    storage = {
+        "total_size_bytes": summary["total_size_bytes"],
+        "total_size_readable": summary["total_size_readable"],
+        "top_tables": sorted(
+            [
+                {
+                    "name": table["name"],
+                    "size_bytes": table["total_size_bytes"],
+                    "size_readable": table["total_size_readable"],
+                    "rows": table["rows"],
+                }
+                for table in tables_list
+            ],
+            key=lambda item: item["size_bytes"],
+            reverse=True,
+        )[:5],
+    }
+
+    schema_structure = _build_schema_structure_from_metadata(table_map, relationships)
+
+    return {
+        "summary": summary,
+        "tables": tables_list,
+        "relationships": relationships,
+        "storage": storage,
+        "schema_structure": schema_structure,
+    }
+
+
+def _build_schema_structure_from_metadata(table_map: Dict[str, Dict[str, Any]], relationships: List[Dict[str, Any]]) -> Dict[str, Any]:
+    schema = {"tables": {}}
+    for table_name, meta in table_map.items():
+        columns_snapshot = {}
+        for column in meta.get("columns", []):
+            columns_snapshot[column["name"]] = {
+                "data_type": column["data_type"],
+                "nullable": column["nullable"],
+                "default": column["default"],
+                "extra": column["extra"],
+                "key": column["key"],
+            }
+        schema["tables"][table_name] = {
+            "columns": columns_snapshot,
+            "foreign_keys": [],
+        }
+    for fk in relationships:
+        table_name = fk["table"]
+        if table_name not in schema["tables"]:
+            continue
+        schema["tables"][table_name]["foreign_keys"].append(
+            {
+                "column": fk["column"],
+                "references_table": fk["references_table"],
+                "references_column": fk["references_column"],
+                "constraint": fk["constraint_name"],
+            }
+        )
+    return schema
+
+
+def _detect_schema_changes(previous: Dict[str, Any], current: Dict[str, Any]) -> List[Dict[str, Any]]:
+    changes: List[Dict[str, Any]] = []
+    prev_tables = previous.get("tables", {})
+    curr_tables = current.get("tables", {})
+    prev_table_names = set(prev_tables.keys())
+    curr_table_names = set(curr_tables.keys())
+
+    for table in sorted(curr_table_names - prev_table_names):
+        changes.append(
+            {
+                "change_type": "TABLE_ADDED",
+                "table_name": table,
+                "column_name": None,
+                "details": {},
+            }
+        )
+
+    for table in sorted(prev_table_names - curr_table_names):
+        changes.append(
+            {
+                "change_type": "TABLE_REMOVED",
+                "table_name": table,
+                "column_name": None,
+                "details": {},
+            }
+        )
+
+    for table in sorted(curr_table_names & prev_table_names):
+        prev_columns = prev_tables.get(table, {}).get("columns", {})
+        curr_columns = curr_tables.get(table, {}).get("columns", {})
+        prev_cols = set(prev_columns.keys())
+        curr_cols = set(curr_columns.keys())
+
+        for column in sorted(curr_cols - prev_cols):
+            changes.append(
+                {
+                    "change_type": "COLUMN_ADDED",
+                    "table_name": table,
+                    "column_name": column,
+                    "details": {"new": curr_columns[column]},
+                }
+            )
+        for column in sorted(prev_cols - curr_cols):
+            changes.append(
+                {
+                    "change_type": "COLUMN_REMOVED",
+                    "table_name": table,
+                    "column_name": column,
+                    "details": {"old": prev_columns[column]},
+                }
+            )
+        for column in sorted(curr_cols & prev_cols):
+            if curr_columns[column] != prev_columns[column]:
+                changes.append(
+                    {
+                        "change_type": "COLUMN_CHANGED",
+                        "table_name": table,
+                        "column_name": column,
+                        "details": {
+                            "old": prev_columns[column],
+                            "new": curr_columns[column],
+                        },
+                    }
+                )
+    return changes
+
+
+def _record_schema_snapshot_if_changed(db: Session, schema_structure: Optional[Dict[str, Any]]) -> None:
+    if not schema_structure:
+        return
+    try:
+        latest_snapshot = (
+            db.query(DBSchemaSnapshot)
+            .order_by(DBSchemaSnapshot.created_at.desc())
+            .first()
+        )
+    except Exception as exc:
+        logger.warning("Schema snapshot skipped (table missing?): %s", exc)
+        return
+
+    current_json = json.dumps(schema_structure, sort_keys=True)
+    if not latest_snapshot:
+        snapshot = DBSchemaSnapshot(snapshot_json=current_json, comment="Initial snapshot")
+        db.add(snapshot)
+        db.commit()
+        return
+
+    previous_data = {}
+    try:
+        previous_data = json.loads(latest_snapshot.snapshot_json or "{}")
+    except (json.JSONDecodeError, TypeError):
+        previous_data = {}
+
+    changes = _detect_schema_changes(previous_data, schema_structure)
+    if not changes:
+        return
+
+    snapshot = DBSchemaSnapshot(snapshot_json=current_json)
+    db.add(snapshot)
+    db.commit()
+    db.refresh(snapshot)
+
+    for change in changes:
+        change_record = DBSchemaChange(
+            snapshot_id=snapshot.id,
+            change_type=change["change_type"],
+            table_name=change["table_name"],
+            column_name=change.get("column_name"),
+            details_json=json.dumps(change.get("details") or {}),
+        )
+        db.add(change_record)
+    db.commit()
+
+
+def _get_schema_changes_payload(db: Session) -> Dict[str, Any]:
+    payload = {
+        "latest_snapshot_id": None,
+        "latest_snapshot_created_at": None,
+        "latest_summary": {},
+        "recent_snapshots": [],
+    }
+    try:
+        snapshots = (
+            db.query(DBSchemaSnapshot)
+            .order_by(DBSchemaSnapshot.created_at.desc())
+            .limit(5)
+            .all()
+        )
+    except Exception as exc:
+        logger.warning("Unable to load schema change history: %s", exc)
+        return payload
+
+    latest_summary_computed = False
+    for snapshot in snapshots:
+        changes = (
+            db.query(DBSchemaChange)
+            .filter(DBSchemaChange.snapshot_id == snapshot.id)
+            .order_by(DBSchemaChange.id.asc())
+            .limit(100)
+            .all()
+        )
+        change_payloads = []
+        for change in changes:
+            details = {}
+            if change.details_json:
+                try:
+                    details = json.loads(change.details_json)
+                except (TypeError, json.JSONDecodeError):
+                    details = {}
+            change_payloads.append(
+                {
+                    "change_type": change.change_type,
+                    "table_name": change.table_name,
+                    "column_name": change.column_name,
+                    "details": details,
+                }
+            )
+        payload["recent_snapshots"].append(
+            {
+                "id": snapshot.id,
+                "created_at": _ensure_timezone_aware(snapshot.created_at),
+                "changes": change_payloads,
+            }
+        )
+        if not latest_summary_computed and change_payloads:
+            payload["latest_snapshot_id"] = snapshot.id
+            payload["latest_snapshot_created_at"] = _ensure_timezone_aware(snapshot.created_at)
+            payload["latest_summary"] = {
+                "new_tables": sum(1 for c in change_payloads if c["change_type"] == "TABLE_ADDED"),
+                "dropped_tables": sum(1 for c in change_payloads if c["change_type"] == "TABLE_REMOVED"),
+                "columns_changed": sum(
+                    1
+                    for c in change_payloads
+                    if c["change_type"] in {"COLUMN_ADDED", "COLUMN_REMOVED", "COLUMN_CHANGED"}
+                ),
+                "change_count": len(change_payloads),
+            }
+            latest_summary_computed = True
+    return payload
 def _annotate_user(user: User) -> User:
     if not user:
         return user
@@ -508,6 +941,7 @@ def require_any_permissions(*permission_codes: PermissionCode):
         )
 
     return dependency
+
 
 def resolve_instagram_access_token(db: Session, page_id: Optional[str]) -> Optional[str]:
     """Resolve the best access token for an Instagram page."""
@@ -972,6 +1406,14 @@ async def get_admin_only_user(current_user: User = Depends(get_current_user)) ->
         )
     return current_user
 
+def require_super_admin(current_user: User = Depends(get_current_user)) -> User:
+    if is_super_admin_user(current_user):
+        return current_user
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Super admin access required"
+    )
+
 # ============= AUTH ENDPOINTS =============
 
 @api_router.post("/auth/register", response_model=UserResponse)
@@ -1223,6 +1665,29 @@ def admin_create_user(
 
     logger.info("User %s created by %s", new_user.email, current_user.email)
     return UserResponse.model_validate(_annotate_user(new_user))
+
+
+# ============= DEVELOPER UTILITIES =============
+
+@api_router.get("/dev/db-overview", response_model=DatabaseOverviewResponse)
+def get_database_overview(
+    current_user: User = Depends(require_super_admin),
+    db: Session = Depends(get_db)
+):
+    overview = _collect_database_overview(db)
+    schema_structure = overview.pop("schema_structure", None)
+    try:
+        _record_schema_snapshot_if_changed(db, schema_structure)
+    except Exception as exc:
+        logger.warning("Schema snapshot update failed: %s", exc)
+    schema_changes = _get_schema_changes_payload(db)
+    return DatabaseOverviewResponse(
+        summary=overview["summary"],
+        tables=overview["tables"],
+        relationships=overview["relationships"],
+        storage=overview["storage"],
+        schema_changes=schema_changes
+    )
 
 
 # ============= POSITION MANAGEMENT ENDPOINTS =============
@@ -2817,6 +3282,43 @@ def list_chats(
         query = query.filter(Chat.assigned_to == current_user.id)
     
     chats = query.order_by(Chat.updated_at.desc()).all()
+
+    missing_instagram_ids = {
+        chat.instagram_user_id
+        for chat in chats
+        if chat.platform == MessagePlatform.INSTAGRAM
+        and chat.instagram_user_id
+        and chat.instagram_user is None
+    }
+    if missing_instagram_ids:
+        instagram_map = {
+            user.igsid: user
+            for user in db.query(InstagramUser).filter(InstagramUser.igsid.in_(missing_instagram_ids)).all()
+        }
+        for chat in chats:
+            if chat.platform == MessagePlatform.INSTAGRAM and not chat.instagram_user:
+                resolved = instagram_map.get(chat.instagram_user_id)
+                if resolved:
+                    chat.instagram_user = resolved
+
+    missing_facebook_ids = {
+        chat.facebook_user_id
+        for chat in chats
+        if chat.platform == MessagePlatform.FACEBOOK
+        and chat.facebook_user_id
+        and chat.facebook_user is None
+    }
+    if missing_facebook_ids:
+        facebook_map = {
+            user.id: user
+            for user in db.query(FacebookUser).filter(FacebookUser.id.in_(missing_facebook_ids)).all()
+        }
+        for chat in chats:
+            if chat.platform == MessagePlatform.FACEBOOK and not chat.facebook_user:
+                resolved = facebook_map.get(chat.facebook_user_id)
+                if resolved:
+                    chat.facebook_user = resolved
+
     return chats
 
 @api_router.get("/chats/{chat_id}", response_model=ChatWithMessages)

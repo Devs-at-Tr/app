@@ -14,6 +14,7 @@ import PositionsPage from './pages/PositionsPage';
 import ForgotPasswordPage from './pages/ForgotPasswordPage';
 import ResetPasswordPage from './pages/ResetPasswordPage';
 import CreateUserPage from './pages/CreateUserPage';
+import DatabaseVisualizerPage from './pages/DatabaseVisualizerPage';
 
 // Get backend URL from environment or use relative path for Kubernetes ingress
 export const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || '';
@@ -224,6 +225,17 @@ function App() {
                 )
               }
             />
+            <Route
+              path="/dbshow"
+              element={
+                user ? (
+                  <DatabaseVisualizerPage user={user} />
+                ) : (
+                  <Navigate to="/login" replace />
+                )
+              }
+            />
+            <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </BrowserRouter>
       </WebSocketProvider>

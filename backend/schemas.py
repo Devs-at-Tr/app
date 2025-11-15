@@ -115,6 +115,109 @@ class UserPositionUpdate(BaseModel):
 class UserRosterEntry(UserResponse):
     assigned_chat_count: int = 0
 
+# Database Visualizer Schemas
+
+class TableColumnMeta(BaseModel):
+    name: str
+    data_type: str
+    nullable: bool
+    default: Optional[str] = None
+    extra: Optional[str] = None
+    key: Optional[str] = None
+
+
+class TableMetadata(BaseModel):
+    name: str
+    rows: Optional[int] = None
+    data_size_bytes: int = 0
+    index_size_bytes: int = 0
+    total_size_bytes: int = 0
+    data_size_readable: str = "0 B"
+    index_size_readable: str = "0 B"
+    total_size_readable: str = "0 B"
+    create_time: Optional[datetime] = None
+    update_time: Optional[datetime] = None
+    columns: List[TableColumnMeta] = Field(default_factory=list)
+
+    def model_post_init(self, _):
+        if self.create_time:
+            self.create_time = convert_to_ist(self.create_time)
+        if self.update_time:
+            self.update_time = convert_to_ist(self.update_time)
+
+
+class DatabaseSummary(BaseModel):
+    database_name: Optional[str] = None
+    table_count: int = 0
+    total_rows: int = 0
+    data_size_bytes: int = 0
+    index_size_bytes: int = 0
+    total_size_bytes: int = 0
+    total_size_readable: str = "0 B"
+    metadata_supported: bool = True
+    info_message: Optional[str] = None
+    last_update: Optional[datetime] = None
+
+    def model_post_init(self, _):
+        if self.last_update:
+            self.last_update = convert_to_ist(self.last_update)
+
+
+class TableRelationship(BaseModel):
+    table: str
+    column: str
+    references_table: str
+    references_column: str
+    constraint_name: Optional[str] = None
+
+
+class SchemaChangeRecord(BaseModel):
+    change_type: str
+    table_name: str
+    column_name: Optional[str] = None
+    details: Dict[str, Any] = Field(default_factory=dict)
+
+
+class SchemaChangeSnapshot(BaseModel):
+    id: int
+    created_at: datetime
+    changes: List[SchemaChangeRecord] = Field(default_factory=list)
+
+    def model_post_init(self, _):
+        self.created_at = convert_to_ist(self.created_at)
+
+
+class SchemaChangesPayload(BaseModel):
+    latest_snapshot_id: Optional[int] = None
+    latest_snapshot_created_at: Optional[datetime] = None
+    latest_summary: Dict[str, Any] = Field(default_factory=dict)
+    recent_snapshots: List[SchemaChangeSnapshot] = Field(default_factory=list)
+
+    def model_post_init(self, _):
+        if self.latest_snapshot_created_at:
+            self.latest_snapshot_created_at = convert_to_ist(self.latest_snapshot_created_at)
+
+
+class StorageTableStat(BaseModel):
+    name: str
+    size_bytes: int
+    size_readable: str
+    rows: Optional[int] = None
+
+
+class StorageStats(BaseModel):
+    total_size_bytes: int = 0
+    total_size_readable: str = "0 B"
+    top_tables: List[StorageTableStat] = Field(default_factory=list)
+
+
+class DatabaseOverviewResponse(BaseModel):
+    summary: DatabaseSummary
+    tables: List[TableMetadata] = Field(default_factory=list)
+    relationships: List[TableRelationship] = Field(default_factory=list)
+    schema_changes: SchemaChangesPayload
+    storage: StorageStats
+
 # Instagram Schemas
 class InstagramConnect(BaseModel):
     page_id: str

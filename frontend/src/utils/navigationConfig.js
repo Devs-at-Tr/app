@@ -18,8 +18,8 @@ export const buildNavigationItems = ({
 }) => {
   const items = [
     { id: 'inbox', label: 'Direct Messages', icon: MessageCircle, to: '/inbox', exact: true },
-    { id: 'instagram', label: 'Instagram', icon: Instagram, to: '/inbox/instagram' },
-    { id: 'facebook', label: 'Facebook', icon: Facebook, to: '/inbox/facebook' },
+    // { id: 'instagram', label: 'Instagram', icon: Instagram, to: '/inbox/instagram' }, // disabled
+    // { id: 'facebook', label: 'Facebook', icon: Facebook, to: '/inbox/facebook' }, // disabled
     { id: 'whatsapp', label: 'WhatsApp', icon: PhoneCall, disabled: true, badge: 'Soon' },
     { id: 'comments', label: 'Comments & Reviews', icon: MessageSquare, to: '/comments' }
   ];

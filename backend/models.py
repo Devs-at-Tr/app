@@ -107,6 +107,31 @@ class PasswordResetToken(Base):
 
     user = relationship("User", backref="password_reset_tokens")
 
+
+class DBSchemaSnapshot(Base):
+    __tablename__ = "db_schema_snapshots"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    created_at = Column(DateTime(timezone=True), default=utc_now)
+    snapshot_json = Column(Text, nullable=False)
+    comment = Column(String(255), nullable=True)
+
+    changes = relationship("DBSchemaChange", back_populates="snapshot", cascade="all, delete-orphan")
+
+
+class DBSchemaChange(Base):
+    __tablename__ = "db_schema_changes"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    snapshot_id = Column(Integer, ForeignKey("db_schema_snapshots.id"), nullable=False, index=True)
+    change_type = Column(String(50), nullable=False)
+    table_name = Column(String(255), nullable=False)
+    column_name = Column(String(255), nullable=True)
+    details_json = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utc_now)
+
+    snapshot = relationship("DBSchemaSnapshot", back_populates="changes")
+
 class InstagramAccount(Base):
     __tablename__ = "instagram_accounts"
     

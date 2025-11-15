@@ -17,3 +17,14 @@ export const hasAnyPermission = (user, permissions = []) => {
   }
   return permissions.some((permission) => hasPermission(user, permission));
 };
+
+export const isSuperAdmin = (user) => {
+  if (!user) {
+    return false;
+  }
+  const positionSlug = user?.position?.slug;
+  if (positionSlug && positionSlug.toLowerCase() === 'super-admin') {
+    return true;
+  }
+  return user.role === 'admin' && !positionSlug;
+};
