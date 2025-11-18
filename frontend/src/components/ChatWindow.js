@@ -348,7 +348,45 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false }) 
         </div>
       </div>
     );
-  }
+  const AttachmentPreview = ({ url }) => {
+    const [mode, setMode] = useState('video'); // 'video' → 'image' → 'link'
+
+    if (mode === 'video') {
+      return (
+        <video
+          src={url}
+          controls
+          className="max-h-64 w-full rounded-xl border border-white/10"
+          onError={() => setMode('image')} // if not a video, try image
+        >
+          Your browser does not support the video tag.
+        </video>
+      );
+    }
+
+    if (mode === 'image') {
+      return (
+        <img
+          src={url}
+          alt="attachment"
+          className="max-h-64 w-full rounded-xl object-cover border border-white/10"
+          onError={() => setMode('link')} // if not an image, fall back to link
+        />
+      );
+    }
+
+    // Final fallback: just a link
+    return (
+      <a
+        href={url}
+        target="_blank"
+        rel="noreferrer"
+        className="block text-xs text-purple-200 underline break-all"
+      >
+        Open attachment
+      </a>
+    );
+  };
   return (
     <div
       className={`flex h-full min-h-0 relative w-full ${isMobile ? 'flex-col space-y-4' : ''}`}
@@ -529,29 +567,12 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false }) 
                           <div className="mt-3 space-y-2">
                             {attachments.map((attachment, index) => {
                               const attachmentUrl = resolveAttachmentUrl(attachment);
-                              if (attachment.type === 'image' && attachmentUrl) {
-                                return (
-                                  <img
-                                    key={`image-${msg.id}-${index}`}
-                                    src={attachmentUrl}
-                                    alt={`attachment-${index + 1}`}
-                                    className="max-h-64 w-full rounded-xl object-cover border border-white/10"
-                                  />
-                                );
-                              }
-                              if (!attachmentUrl) {
-                                return null;
-                              }
+                              if (!attachmentUrl) return null;
+
                               return (
-                                <a
-                                  key={`file-${msg.id}-${index}`}
-                                  href={attachmentUrl}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="block text-xs text-purple-200 underline break-all"
-                                >
-                                  View attachment
-                                </a>
+                                <div key={`${msg.id || 'msg'}-attachment-${index}`}>
+                                  <AttachmentPreview url={attachmentUrl} />
+                                </div>
                               );
                             })}
                           </div>
