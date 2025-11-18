@@ -3,7 +3,7 @@ from starlette.websockets import WebSocketState
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import func, text
+from sqlalchemy import func, text, or_
 from sqlalchemy.exc import IntegrityError
 from typing import List, Optional, Set, Dict, Any, Tuple, Type, Union
 from websocket_manager import manager as ws_manager
@@ -49,7 +49,8 @@ from models import (
     InstagramInsightScope,
     PasswordResetToken,
     DBSchemaSnapshot,
-    DBSchemaChange
+    DBSchemaChange,
+    AssignmentCursor
 )
 from schemas import (
     UserRegister, UserLogin, UserResponse, TokenResponse,
@@ -73,6 +74,7 @@ from schemas import (
     PositionUpdate,
     PositionResponse,
     UserPositionUpdate,
+    UserActiveUpdate,
     UserRosterEntry,
     ForgotPasswordRequest,
     ResetPasswordRequest,
@@ -886,7 +888,11 @@ def _serialize_user_light(user: Optional[User]) -> Optional[Dict[str, str]]:
     }
 
 
-def _merge_message_metadata(existing_json: Optional[str], sent_by: Optional[User] = None) -> Optional[str]:
+def _merge_message_metadata(
+    existing_json: Optional[str],
+    sent_by: Optional[User] = None,
+    extra: Optional[Dict[str, Any]] = None
+) -> Optional[str]:
     payload: Dict[str, Any] = {}
     if existing_json:
         try:
@@ -897,16 +903,157 @@ def _merge_message_metadata(existing_json: Optional[str], sent_by: Optional[User
         info = _serialize_user_light(sent_by)
         if info:
             payload["sent_by"] = info
+    if extra:
+        for key, value in extra.items():
+            if value is not None:
+                payload[key] = value
     return json.dumps(payload) if payload else None
+
+
+def _parse_ads_context_data(raw: Any) -> Optional[Union[Dict[str, Any], str]]:
+    if raw is None:
+        return None
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        trimmed = raw.strip()
+        if not trimmed:
+            return None
+        try:
+            return json.loads(trimmed)
+        except (ValueError, TypeError):
+            return raw
+    return None
+
+
+def _normalize_referral_payload(referral: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not isinstance(referral, dict) or not referral:
+        return None
+
+    normalized: Dict[str, Any] = {}
+    for key in (
+        "source",
+        "type",
+        "ref",
+        "ad_id",
+        "adset_id",
+        "campaign_id",
+        "product_id",
+        "referral_id",
+        "source_event"
+    ):
+        value = referral.get(key)
+        if value is not None:
+            normalized[key] = value
+
+    referer_uri = referral.get("referer_uri") or referral.get("referrer_uri")
+    if referer_uri:
+        normalized["referer_uri"] = referer_uri
+
+    destination = referral.get("destination") or referral.get("destination_url")
+    if destination:
+        normalized["destination"] = destination
+
+    ads_context = _parse_ads_context_data(referral.get("ads_context_data"))
+    if ads_context:
+        normalized["ads_context_data"] = ads_context
+        if isinstance(ads_context, dict):
+            for context_key in ("campaign_id", "ad_id", "adset_id", "product_id"):
+                context_value = ads_context.get(context_key)
+                if context_value and context_key not in normalized:
+                    normalized[context_key] = context_value
+
+    is_guest_user = referral.get("is_guest_user")
+    if is_guest_user is not None:
+        normalized["is_guest_user"] = is_guest_user
+
+    if referral.get("raw_referral"):
+        normalized["raw_referral"] = referral.get("raw_referral")
+
+    if normalized:
+        normalized.setdefault("raw", referral)
+        return normalized
+    return None
+
+
+def _extract_messaging_referral(event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    if not isinstance(event, dict):
+        return None
+    candidate = event.get("referral")
+    if isinstance(candidate, dict):
+        return candidate
+    for key in ("message", "postback"):
+        nested = event.get(key)
+        if isinstance(nested, dict):
+            nested_referral = nested.get("referral")
+            if isinstance(nested_referral, dict):
+                return nested_referral
+    return None
 
 
 def _is_assignable_agent(user: Optional[User]) -> bool:
     if not user or user.role != UserRole.AGENT:
         return False
+    if hasattr(user, "is_active") and not user.is_active:
+        return False
     position = getattr(user, "position", None)
     if position and position.slug != DEFAULT_POSITION_SLUGS["agent"]:
         return False
     return True
+
+def _get_assignable_agents(db: Session) -> List[User]:
+    agents = (
+        db.query(User)
+        .options(joinedload(User.position))
+        .filter(User.role == UserRole.AGENT)
+        .filter(User.is_active.is_(True))
+        .all()
+    )
+    return [agent for agent in agents if _is_assignable_agent(agent)]
+
+def _get_assignment_cursor(db: Session, name: str = "default") -> AssignmentCursor:
+    query = db.query(AssignmentCursor).filter(AssignmentCursor.name == name)
+    bind = getattr(db, "bind", None)
+    if bind and bind.dialect.name.lower() != "sqlite":
+        query = query.with_for_update(of=AssignmentCursor)
+    cursor = query.first()
+    if not cursor:
+        cursor = AssignmentCursor(name=name)
+        db.add(cursor)
+        db.flush()
+    return cursor
+
+def _assign_chat_round_robin(db: Session, chat: Chat) -> Optional[User]:
+    agents = _get_assignable_agents(db)
+    if not agents:
+        chat.assigned_to = None
+        chat.status = ChatStatus.UNASSIGNED
+        return None
+
+    cursor = _get_assignment_cursor(db)
+    ordered_agents = sorted(
+        agents,
+        key=lambda agent: (getattr(agent, "created_at", utc_now()), agent.id)
+    )
+    next_agent = ordered_agents[0]
+    if cursor.last_user_id:
+        for idx, agent in enumerate(ordered_agents):
+            if agent.id == cursor.last_user_id:
+                next_agent = ordered_agents[(idx + 1) % len(ordered_agents)]
+                break
+
+    chat.assigned_to = next_agent.id
+    chat.status = ChatStatus.ASSIGNED
+    cursor.last_user_id = next_agent.id
+    cursor.updated_at = utc_now()
+    return next_agent
+
+def _chat_requires_agent_reply(chat: Chat) -> bool:
+    if not chat.last_incoming_at:
+        return False
+    if not chat.last_outgoing_at:
+        return True
+    return chat.last_outgoing_at < chat.last_incoming_at
 
 
 def require_permissions(*permission_codes: PermissionCode):
@@ -1596,13 +1743,15 @@ def list_users(current_user: User = Depends(get_admin_user), db: Session = Depen
     return [_annotate_user(user) for user in users]
 
 @api_router.get("/users/agents", response_model=List[UserResponse])
-def list_agents(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    agents = (
-        db.query(User)
-        .options(joinedload(User.position))
-        .filter(User.role == UserRole.AGENT)
-        .all()
-    )
+def list_agents(
+    include_inactive: bool = False,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    query = db.query(User).options(joinedload(User.position)).filter(User.role == UserRole.AGENT)
+    if not include_inactive:
+        query = query.filter(User.is_active.is_(True))
+    agents = query.all()
     assignable = [agent for agent in agents if _is_assignable_agent(agent)]
     return [_annotate_user(agent) for agent in assignable]
 
@@ -1636,6 +1785,23 @@ def user_roster(
         user_payload["assigned_chat_count"] = int(counts.get(user.id, 0) or 0)
         roster.append(UserRosterEntry.model_validate(user_payload))
     return roster
+
+@api_router.patch("/users/{user_id}/active", response_model=UserResponse)
+def update_user_active_state(
+    user_id: str,
+    payload: UserActiveUpdate,
+    current_user: User = Depends(require_permissions(PermissionCode.POSITION_MANAGE)),
+    db: Session = Depends(get_db)
+):
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if user.id == current_user.id and not payload.is_active:
+        logger.warning("User %s attempted to deactivate their own account", current_user.email)
+    user.is_active = payload.is_active
+    db.commit()
+    db.refresh(user)
+    return UserResponse.model_validate(_annotate_user(user))
 
 
 @api_router.post("/admin/users", response_model=UserResponse)
@@ -1825,7 +1991,7 @@ async def list_instagram_comments(
         accounts = db.query(InstagramAccount).filter(
             InstagramAccount.user_id == current_user.id
         ).all()
-        
+        print("Accounts : ",accounts)
         if not accounts:
             logger.info(f"No Instagram accounts found for user {current_user.id}")
             return []
@@ -2634,6 +2800,12 @@ async def _handle_instagram_webhook(request: Request, db: Session) -> Dict[str, 
     try:
         body = await request.body()
 
+        signature_sha256 = request.headers.get("X-Hub-Signature-256")
+        signature_sha1 = request.headers.get("X-Hub-Signature")
+        # if not instagram_client.verify_webhook_signature(body, signature_sha256, signature_sha1):
+        #     logger.warning("Invalid Instagram webhook signature")
+        #     raise HTTPException(status_code=401, detail="Invalid signature")
+
         data = await request.json()
         print("Instagram webhook payload:", data)
         logger.info(f"Received Instagram webhook: {data.get('object')}")
@@ -2687,6 +2859,17 @@ async def _handle_instagram_webhook(request: Request, db: Session) -> Dict[str, 
                         normalized_message_id = f"hash:{hashlib.sha256(message_id.encode('utf-8')).hexdigest()}"
                     else:
                         normalized_message_id = message_id
+                raw_timestamp = messaging_event.get("timestamp")
+                if not raw_timestamp:
+                    raw_timestamp = utc_now().timestamp() * 1000
+                timestamp_seconds = int(raw_timestamp / 1000)
+                event_datetime = datetime.fromtimestamp(timestamp_seconds, tz=timezone.utc)
+
+                referral_raw = _extract_messaging_referral(messaging_event)
+                referral_payload = _normalize_referral_payload(referral_raw)
+                metadata_extra = {"referral": referral_payload} if referral_payload else None
+                referral_metadata_json = _merge_message_metadata(None, extra=metadata_extra)
+
                 raw_attachments = processed_payload.get("attachments") or []
                 if not isinstance(raw_attachments, list):
                     raw_attachments = [raw_attachments]
@@ -2706,12 +2889,6 @@ async def _handle_instagram_webhook(request: Request, db: Session) -> Dict[str, 
                     if fetched_profile.get("success"):
                         profile_data = fetched_profile
                         profile_cache[igsid] = profile_data
-
-                raw_timestamp = messaging_event.get("timestamp")
-                if not raw_timestamp:
-                    raw_timestamp = utc_now().timestamp() * 1000
-                timestamp_seconds = int(raw_timestamp / 1000)
-                event_datetime = datetime.fromtimestamp(timestamp_seconds, tz=timezone.utc)
 
                 resolved_text = resolve_message_text(raw_text_content, attachments)
                 last_message_preview = resolved_text
@@ -2773,7 +2950,8 @@ async def _handle_instagram_webhook(request: Request, db: Session) -> Dict[str, 
                     ts=timestamp_seconds,
                     created_at=event_datetime,
                     raw_payload_json=raw_message_json,
-                    is_ticklegram=is_ticklegram_event
+                    is_ticklegram=is_ticklegram_event,
+                    metadata_json=referral_metadata_json
                 )
                 db.add(ig_message)
                 try:
@@ -2826,6 +3004,9 @@ async def _handle_instagram_webhook(request: Request, db: Session) -> Dict[str, 
                         )
                         db.add(chat)
                         db.flush()
+                        assigned_agent = _assign_chat_round_robin(db, chat)
+                        if assigned_agent:
+                            chat.assigned_agent = assigned_agent
                     else:
                         if profile_data:
                             updated_username = profile_data.get("username") or profile_data.get("name")
@@ -2844,13 +3025,15 @@ async def _handle_instagram_webhook(request: Request, db: Session) -> Dict[str, 
                         message_type=inferred_type,
                         timestamp=event_datetime,
                         is_ticklegram=False,
-                        attachments_json=_dump_attachments_json(attachments)
+                        attachments_json=_dump_attachments_json(attachments),
+                        metadata_json=referral_metadata_json
                     )
                     new_message.attachments = attachments
                     db.add(new_message)
 
                     chat.last_message = inbound_content
                     chat.unread_count += 1
+                    chat.last_incoming_at = event_datetime
                     chat.updated_at = event_datetime
                     existing_chat = chat
                 else:
@@ -2921,6 +3104,11 @@ async def _handle_instagram_webhook(request: Request, db: Session) -> Dict[str, 
                         new_message.attachments = attachments or getattr(new_message, "attachments", [])
                         if attachments:
                             new_message.attachments_json = _dump_attachments_json(attachments)
+                        if metadata_extra:
+                            new_message.metadata_json = _merge_message_metadata(
+                                new_message.metadata_json,
+                                extra=metadata_extra
+                            )
                     else:
                         new_message = create_chat_message_record(
                             chat,
@@ -2929,12 +3117,14 @@ async def _handle_instagram_webhook(request: Request, db: Session) -> Dict[str, 
                             message_type=inferred_type,
                             timestamp=event_datetime,
                             is_ticklegram=is_ticklegram_event,
-                            attachments_json=_dump_attachments_json(attachments)
+                            attachments_json=_dump_attachments_json(attachments),
+                            metadata_json=referral_metadata_json
                         )
                         new_message.attachments = attachments
                         db.add(new_message)
 
                     chat.last_message = outbound_preview
+                    chat.last_outgoing_at = event_datetime
                     chat.updated_at = event_datetime
                     existing_chat = chat
 
@@ -2980,6 +3170,8 @@ async def _handle_instagram_webhook(request: Request, db: Session) -> Dict[str, 
                     "page_id": instagram_account_id,
                     "delivery_status": "received" if direction == InstagramMessageDirection.INBOUND else "delivered"
                 }
+                if referral_payload:
+                    dm_payload["referral"] = referral_payload
 
                 if notify_users:
                     await ws_manager.broadcast_to_users(notify_users, dm_payload)
@@ -3187,6 +3379,7 @@ async def instagram_dm_send(
 
     if last_message_preview:
         chat.last_message = last_message_preview
+    chat.last_outgoing_at = now_utc
     chat.updated_at = now_utc
 
     message_record = create_chat_message_record(
@@ -3254,6 +3447,9 @@ def list_chats(
     status_filter: Optional[str] = None,
     assigned_to_me: bool = False,
     platform: Optional[str] = None,
+    assigned_to: Optional[str] = None,
+    unseen: Optional[bool] = None,
+    not_replied: Optional[bool] = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -3276,6 +3472,29 @@ def list_chats(
             query = query.filter(Chat.platform == MessagePlatform.INSTAGRAM)
         elif platform.upper() == "FACEBOOK":
             query = query.filter(Chat.platform == MessagePlatform.FACEBOOK)
+    
+    if assigned_to and assigned_to.lower() == "unassigned":
+        query = query.filter(Chat.assigned_to.is_(None))
+    elif assigned_to:
+        query = query.filter(Chat.assigned_to == assigned_to)
+
+    if unseen is True:
+        query = query.filter(Chat.unread_count > 0)
+    elif unseen is False:
+        query = query.filter(Chat.unread_count == 0)
+
+    if not_replied is True:
+        query = query.filter(Chat.last_incoming_at.isnot(None)).filter(
+            or_(Chat.last_outgoing_at.is_(None), Chat.last_outgoing_at < Chat.last_incoming_at)
+        )
+    elif not_replied is False:
+        query = query.filter(
+            or_(
+                Chat.last_incoming_at.is_(None),
+                Chat.last_outgoing_at.isnot(None),
+                Chat.last_outgoing_at >= Chat.last_incoming_at,
+            )
+        )
     
     # Filter by assigned to current user (for agents without wider visibility)
     if assigned_to_me or not _user_can_view_all_chats(current_user):
@@ -3319,6 +3538,9 @@ def list_chats(
                 if resolved:
                     chat.facebook_user = resolved
 
+    for chat in chats:
+        chat.pending_agent_reply = _chat_requires_agent_reply(chat)
+
     return chats
 
 @api_router.get("/chats/{chat_id}", response_model=ChatWithMessages)
@@ -3354,7 +3576,7 @@ def get_chat(chat_id: str, current_user: User = Depends(get_current_user), db: S
             InstagramMessageLog.igsid == chat.instagram_user_id
         ).all()
     hydrate_instagram_chat_messages(chat, instagram_msgs)
-    
+    chat.pending_agent_reply = _chat_requires_agent_reply(chat)
     return chat
 
 @api_router.post("/chats/{chat_id}/assign")
@@ -3438,6 +3660,8 @@ async def send_message(chat_id: str, message_data: MessageCreate, current_user: 
                     detail="Outside the 24-hour human agent window. Send an approved template instead."
                 )
 
+    event_time = utc_now()
+
     # If in mock mode, just create the message without actual platform integration
     if instagram_client.mode == InstagramMode.MOCK and facebook_client.mode == FacebookMode.MOCK:
         new_message = create_chat_message_record(
@@ -3445,14 +3669,15 @@ async def send_message(chat_id: str, message_data: MessageCreate, current_user: 
             sender=MessageSender.AGENT,
             content=message_data.content,
             message_type=message_data.message_type,
-            timestamp=utc_now(),
+            timestamp=event_time,
             is_ticklegram=True,
             metadata_json=_merge_message_metadata(None, sent_by=current_user)
         )
         new_message.attachments = []
         db.add(new_message)
         chat.last_message = message_data.content
-        chat.updated_at = utc_now()
+        chat.last_outgoing_at = event_time
+        chat.updated_at = event_time
         db.commit()
         db.refresh(new_message)
         logger.info(f"Mock message sent in chat {chat_id}")
@@ -3505,7 +3730,7 @@ async def send_message(chat_id: str, message_data: MessageCreate, current_user: 
         sender=MessageSender.AGENT,
         content=message_data.content,
         message_type=message_data.message_type,
-        timestamp=utc_now(),
+        timestamp=event_time,
         is_ticklegram=True,
         metadata_json=_merge_message_metadata(None, sent_by=current_user)
     )
@@ -3514,7 +3739,8 @@ async def send_message(chat_id: str, message_data: MessageCreate, current_user: 
     
     # Update chat
     chat.last_message = message_data.content
-    chat.updated_at = utc_now()
+    chat.last_outgoing_at = event_time
+    chat.updated_at = event_time
     
     db.commit()
     db.refresh(new_message)
@@ -3569,7 +3795,7 @@ def get_dashboard_stats(current_user: User = Depends(get_current_user), db: Sess
         ).count()
     
     total_messages = db.query(InstagramChatMessage).count() + db.query(FacebookMessage).count()
-    active_agents = db.query(User).filter(User.role == UserRole.AGENT).count()
+    active_agents = len(_get_assignable_agents(db))
     
     return DashboardStats(
         total_chats=total_chats,
@@ -4000,6 +4226,7 @@ async def send_template(
     
     meta_template_tag = os.getenv("META_TEMPLATE_TAG", "ACCOUNT_UPDATE")
     use_meta_template = template.is_meta_approved
+    event_time = utc_now()
 
     if use_meta_template and not template.meta_template_id:
         raise HTTPException(
@@ -4013,14 +4240,15 @@ async def send_template(
             sender=MessageSender.AGENT,
             content=message_content,
             message_type=MessageType.TEXT,
-            timestamp=utc_now(),
+            timestamp=event_time,
             is_ticklegram=True,
             metadata_json=_merge_message_metadata(None, sent_by=current_user)
         )
         new_message.attachments = []
         db.add(new_message)
         chat.last_message = message_content
-        chat.updated_at = utc_now()
+        chat.last_outgoing_at = event_time
+        chat.updated_at = event_time
         db.commit()
         db.refresh(new_message)
         logger.info(f"Template message sent (mock mode) in chat {chat.id}")
@@ -4083,14 +4311,15 @@ async def send_template(
             sender=MessageSender.AGENT,
             content=message_content,
             message_type=MessageType.TEXT,
-            timestamp=utc_now(),
+            timestamp=event_time,
             is_ticklegram=True,
             metadata_json=_merge_message_metadata(None, sent_by=current_user)
         )
         new_message.attachments = []
         db.add(new_message)
         chat.last_message = message_content
-        chat.updated_at = utc_now()
+        chat.last_outgoing_at = event_time
+        chat.updated_at = event_time
         db.commit()
         db.refresh(new_message)
     
@@ -4171,6 +4400,13 @@ async def handle_facebook_webhook(request: Request, db: Session = Depends(get_db
                             message_data=message_data,
                             page_id=page_id
                         )
+                        fb_referral_payload = _normalize_referral_payload(
+                            _extract_messaging_referral(messaging_event)
+                        )
+                        fb_metadata_json = _merge_message_metadata(
+                            None,
+                            extra={"referral": fb_referral_payload} if fb_referral_payload else None
+                        )
                         
                         chat = db.query(Chat).filter(
                             Chat.facebook_user_id == sender_id,
@@ -4228,6 +4464,9 @@ async def handle_facebook_webhook(request: Request, db: Session = Depends(get_db
                             )
                             db.add(chat)
                             db.flush()
+                            assigned_agent = _assign_chat_round_robin(db, chat)
+                            if assigned_agent:
+                                chat.assigned_agent = assigned_agent
                         elif not chat.facebook_user_id:
                             chat.facebook_user_id = facebook_user.id
 
@@ -4235,13 +4474,15 @@ async def handle_facebook_webhook(request: Request, db: Session = Depends(get_db
                             chat.username = computed_username
                             chat.profile_pic_url = profile_pic_url
 
+                        event_timestamp = utc_now()
                         new_message = create_chat_message_record(
                             chat,
                             sender=MessageSender.FACEBOOK_USER,
                             content=processed.get("text", ""),
                             message_type=MessageType.TEXT,
-                            timestamp=utc_now(),
-                            is_ticklegram=False
+                            timestamp=event_timestamp,
+                            is_ticklegram=False,
+                            metadata_json=fb_metadata_json
                         )
                         new_message.attachments = []
                         db.add(new_message)
@@ -4249,7 +4490,8 @@ async def handle_facebook_webhook(request: Request, db: Session = Depends(get_db
                         # Update chat
                         chat.last_message = processed.get("text", "")
                         chat.unread_count += 1
-                        chat.updated_at = utc_now()
+                        chat.last_incoming_at = event_timestamp
+                        chat.updated_at = event_timestamp
                         
                         db.commit()
                         db.refresh(new_message)
@@ -4330,7 +4572,9 @@ def simulate_incoming_message(chat_id: str, message: str, current_user: User = D
     
     chat.last_message = message
     chat.unread_count += 1
-    chat.updated_at = utc_now()
+    now_time = utc_now()
+    chat.last_incoming_at = now_time if chat.platform == MessagePlatform.INSTAGRAM else chat.last_incoming_at
+    chat.updated_at = now_time
     
     db.commit()
     db.refresh(new_message)

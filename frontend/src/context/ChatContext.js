@@ -43,6 +43,7 @@ export const ChatProvider = ({ children, userRole }) => {
   const [activePlatform, setActivePlatform] = useState('all');
   const activePlatformRef = useRef('all');
   const loadChatsRef = useRef(null);
+  const lastFiltersRef = useRef({});
 
   const updateChatMessages = useCallback((chatId, newMessage, options = {}) => {
     const { chatExists = true } = options;
@@ -106,15 +107,31 @@ export const ChatProvider = ({ children, userRole }) => {
     });
   }, [selectedChat]);
 
-  const loadChats = useCallback(async (platform = 'all') => {
+  const loadChats = useCallback(async (platform = 'all', filters = {}) => {
     setLoading(true);
     setError(null);
+    activePlatformRef.current = platform;
+    lastFiltersRef.current = filters || {};
     try {
       const token = localStorage.getItem('token');
       if (!token) throw new Error('No authentication token found');
 
       const headers = { Authorization: `Bearer ${token}` };
-      const chatParams = platform !== 'all' ? { platform } : {};
+      const chatParams = {};
+      if (platform !== 'all') {
+        chatParams.platform = platform;
+      }
+      if (filters) {
+        if (filters.unseen !== undefined) {
+          chatParams.unseen = filters.unseen;
+        }
+        if (filters.not_replied !== undefined) {
+          chatParams.not_replied = filters.not_replied;
+        }
+        if (filters.assigned_to) {
+          chatParams.assigned_to = filters.assigned_to;
+        }
+      }
       
       const response = await axios.get(`${API}/chats`, { 
         headers, 
@@ -224,7 +241,7 @@ export const ChatProvider = ({ children, userRole }) => {
           // Use setTimeout to avoid state update during render
           setTimeout(() => {
             if (loadChatsRef.current) {
-              loadChatsRef.current(activePlatformRef.current);
+              loadChatsRef.current(activePlatformRef.current, lastFiltersRef.current);
             }
           }, 0);
           return currentChats;

@@ -93,6 +93,7 @@ class UserResponse(BaseModel):
     name: str
     email: str
     role: UserRole
+    is_active: bool = True
     position: Optional[PositionResponse] = None
     permissions: List[str] = Field(default_factory=list)
     created_at: datetime
@@ -114,6 +115,9 @@ class UserPositionUpdate(BaseModel):
 
 class UserRosterEntry(UserResponse):
     assigned_chat_count: int = 0
+
+class UserActiveUpdate(BaseModel):
+    is_active: bool
 
 # Database Visualizer Schemas
 
@@ -454,6 +458,9 @@ class ChatResponse(BaseModel):
     facebook_page_id: Optional[str] = None
     created_at: datetime
     updated_at: datetime
+    last_incoming_at: Optional[datetime] = None
+    last_outgoing_at: Optional[datetime] = None
+    pending_agent_reply: bool = False
     assigned_agent: Optional[UserResponse] = None
     instagram_user: Optional[InstagramUserSchema] = None
     facebook_user: Optional[FacebookUserSchema] = None
@@ -464,6 +471,10 @@ class ChatResponse(BaseModel):
     def model_post_init(self, _):
         self.created_at = convert_to_ist(self.created_at)
         self.updated_at = convert_to_ist(self.updated_at)
+        if self.last_incoming_at:
+            self.last_incoming_at = convert_to_ist(self.last_incoming_at)
+        if self.last_outgoing_at:
+            self.last_outgoing_at = convert_to_ist(self.last_outgoing_at)
 
 class ChatWithMessages(ChatResponse):
     messages: List[MessageResponse] = []

@@ -24,6 +24,7 @@ const UserDirectoryPage = ({ user, onLogout }) => {
   );
   const canAssignPositions = useMemo(() => hasPermission(user, 'position:assign'), [user]);
   const canInviteUsers = useMemo(() => hasPermission(user, 'user:invite'), [user]);
+  const canViewStats = useMemo(() => hasPermission(user, 'stats:view'), [user]);
 
   const navigationItems = useMemo(
     () =>
@@ -31,9 +32,10 @@ const UserDirectoryPage = ({ user, onLogout }) => {
         canManageTemplates,
         canViewUserRoster,
         canManagePositions,
-        canInviteUsers
+        canInviteUsers,
+        canViewStats
       }),
-    [canManageTemplates, canViewUserRoster, canManagePositions, canInviteUsers]
+    [canManageTemplates, canViewUserRoster, canManagePositions, canInviteUsers, canViewStats]
   );
 
   const loadUserRoster = useCallback(async () => {
@@ -92,6 +94,27 @@ const UserDirectoryPage = ({ user, onLogout }) => {
     loadPositions();
   }, [loadPositions]);
 
+  const handleToggleActive = useCallback(
+    async (userId, isActive) => {
+      try {
+        const token = localStorage.getItem('token');
+        if (!token) {
+          throw new Error('No authentication token found');
+        }
+        await axios.patch(
+          `${API}/users/${userId}/active`,
+          { is_active: isActive },
+          { headers: { Authorization: `Bearer ${token}` }, timeout: 30000 }
+        );
+        await loadUserRoster();
+      } catch (toggleError) {
+        console.error('Error updating user status:', toggleError);
+        setError(toggleError.response?.data?.detail || toggleError.message || 'Unable to update user');
+      }
+    },
+    [loadUserRoster]
+  );
+
   const handleAssignPosition = useCallback(
     async (userId, positionId) => {
       if (!canAssignPositions) {
@@ -138,6 +161,8 @@ const UserDirectoryPage = ({ user, onLogout }) => {
               positionsLoading={positionsLoading}
               onManagePositions={() => navigate('/positions')}
               onAssignPosition={handleAssignPosition}
+              onToggleActive={handleToggleActive}
+              canToggleActive={canManagePositions}
             />
           ) : (
             <div className="rounded-xl border border-[var(--tg-border-soft)] bg-[var(--tg-surface)] p-6 text-sm text-[var(--tg-text-secondary)]">

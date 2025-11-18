@@ -86,6 +86,7 @@ class User(Base):
     password_hash = Column(String(255), nullable=False)
     role = Column(SQLEnum(UserRole), nullable=False, default=UserRole.AGENT)
     position_id = Column(String(36), ForeignKey("positions.id"), nullable=True, index=True)
+    is_active = Column(Boolean, nullable=False, default=True, server_default="1")
     created_at = Column(DateTime(timezone=True), default=utc_now)
     updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
     
@@ -160,6 +161,8 @@ class Chat(Base):
     facebook_page_id = Column(String(255), nullable=True)
     created_at = Column(DateTime(timezone=True), default=utc_now)
     updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+    last_incoming_at = Column(DateTime(timezone=True), nullable=True)
+    last_outgoing_at = Column(DateTime(timezone=True), nullable=True)
     
     instagram_chat_messages = relationship(
         "InstagramMessage",
@@ -189,6 +192,14 @@ class Chat(Base):
     @messages.setter
     def messages(self, value):
         self._messages_override = value
+
+
+class AssignmentCursor(Base):
+    __tablename__ = "assignment_cursors"
+
+    name = Column(String(64), primary_key=True)
+    last_user_id = Column(String(36), nullable=True)
+    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
 class FacebookUser(Base):
     __tablename__ = "facebook_users"

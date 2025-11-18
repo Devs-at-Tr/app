@@ -38,6 +38,7 @@ const CreateUserPage = ({ user, onLogout }) => {
     () => hasAnyPermission(user, ['position:assign', 'position:manage']),
     [user]
   );
+  const canViewStats = useMemo(() => hasPermission(user, 'stats:view'), [user]);
 
   const navigationItems = useMemo(
     () =>
@@ -45,9 +46,10 @@ const CreateUserPage = ({ user, onLogout }) => {
         canManageTemplates,
         canViewUserRoster,
         canManagePositions,
-        canInviteUsers
+        canInviteUsers,
+        canViewStats
       }),
-    [canManageTemplates, canViewUserRoster, canManagePositions, canInviteUsers]
+    [canManageTemplates, canViewUserRoster, canManagePositions, canInviteUsers, canViewStats]
   );
 
   const loadPositions = useCallback(async () => {

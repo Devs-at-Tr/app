@@ -30,7 +30,7 @@ import {
  * - Each page renders its module-specific layout inside {children}; AppShell only handles the
  *   persistent chrome (sidebar + mobile header) and theme toggling.
  */
-const AppShell = ({ user, navItems = [], onLogout, children }) => {
+const AppShell = ({ user, navItems = [], onLogout, children, sidebarExtras = null }) => {
   const { theme, toggleTheme } = useTheme();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [isSidebarExpanded, setSidebarExpanded] = useState(false);
@@ -176,7 +176,9 @@ const AppShell = ({ user, navItems = [], onLogout, children }) => {
     </nav>
   );
 
-  const SidebarContent = (expanded) => (
+  const SidebarContent = (expanded) => {
+    const extras = typeof sidebarExtras === 'function' ? sidebarExtras(expanded) : sidebarExtras;
+    return (
     <div
       className={cn(
         'flex flex-col h-full px-3 py-6',
@@ -193,6 +195,11 @@ const AppShell = ({ user, navItems = [], onLogout, children }) => {
         )}
       </div>
       {renderNavList(expanded)}
+      {extras && (
+        <div className="mt-4">
+          {extras}
+        </div>
+      )}
       <div className="mt-auto space-y-3">
         <Button
           variant="ghost"
@@ -224,6 +231,7 @@ const AppShell = ({ user, navItems = [], onLogout, children }) => {
       </div>
     </div>
   );
+  };
 
   return (
     <div className="app-shell flex min-h-screen bg-[var(--tg-app-bg)] text-[var(--tg-text-primary)]">

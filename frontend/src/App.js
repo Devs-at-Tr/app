@@ -8,6 +8,7 @@ import LoginPage from './pages/LoginPage';
 import SignupPage from './pages/SignupPage';
 import InboxPage from './pages/InboxPage';
 import TemplatesPage from './pages/TemplatesPage';
+import StatsPage from './pages/StatsPage';
 import CommentsPage from './pages/CommentsPage';
 import UserDirectoryPage from './pages/UserDirectoryPage';
 import PositionsPage from './pages/PositionsPage';
@@ -190,6 +191,16 @@ function App() {
               element={
                 user ? (
                   <CommentsPage user={user} onLogout={handleLogout} />
+                ) : (
+                  <Navigate to="/login" replace />
+                )
+              }
+            />
+            <Route
+              path="/stats"
+              element={
+                user ? (
+                  <StatsPage user={user} onLogout={handleLogout} />
                 ) : (
                   <Navigate to="/login" replace />
                 )

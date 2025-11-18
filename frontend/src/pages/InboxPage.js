@@ -7,19 +7,25 @@ import { API } from '../App';
 import AppShell from '../layouts/AppShell';
 import InboxLayout from '../layouts/InboxLayout';
 import InboxWorkspace from '../layouts/InboxWorkspace';
-import StatsCards from '../components/StatsCards';
 import ChatSidebar from '../components/ChatSidebar';
 import ChatWindow from '../components/ChatWindow';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Sheet, SheetContent } from '../components/ui/sheet';
-import { Settings, Instagram, Search } from 'lucide-react';
+import { Settings, Instagram, Search, EyeOff, CornerDownLeft } from 'lucide-react';
 import { useIsMobile } from '../hooks/useMediaQuery';
 import FacebookPageManager from '../components/FacebookPageManager';
 import InstagramAccountManager from '../components/InstagramAccountManager';
 import { hasPermission, hasAnyPermission } from '../utils/permissionUtils';
 import { buildNavigationItems } from '../utils/navigationConfig';
 import { cn } from '../lib/utils';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from '../components/ui/select';
 
 const SUPPORTED_CHANNELS = ['instagram', 'facebook'];
 
@@ -50,6 +56,11 @@ const InboxContent = ({ user, onLogout }) => {
   const [chatSearchQuery, setChatSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [chatFilters, setChatFilters] = useState({
+    unseen: false,
+    notReplied: false,
+    assignedTo: 'all'
+  });
 
   const canManageIntegrations = useMemo(() => hasPermission(user, 'integration:manage'), [user]);
   const canManageTemplates = useMemo(() => hasPermission(user, 'template:manage'), [user]);
@@ -64,6 +75,11 @@ const InboxContent = ({ user, onLogout }) => {
     [user]
   );
   const canInviteUsers = useMemo(() => hasPermission(user, 'user:invite'), [user]);
+  const canViewStats = useMemo(() => hasPermission(user, 'stats:view'), [user]);
+  const canViewAllChats = useMemo(
+    () => hasAnyPermission(user, ['chat:view:team', 'chat:view:all']),
+    [user]
+  );
 
   const navigationItems = useMemo(
     () =>
@@ -71,10 +87,25 @@ const InboxContent = ({ user, onLogout }) => {
         canManageTemplates,
         canViewUserRoster,
         canManagePositions,
-        canInviteUsers
+        canInviteUsers,
+        canViewStats
       }),
-    [canManageTemplates, canViewUserRoster, canManagePositions, canInviteUsers]
+    [canManageTemplates, canViewUserRoster, canManagePositions, canInviteUsers, canViewStats]
   );
+
+  const buildChatFilterParams = useCallback(() => {
+    const params = {};
+    if (chatFilters.unseen) {
+      params.unseen = true;
+    }
+    if (chatFilters.notReplied) {
+      params.not_replied = true;
+    }
+    if (chatFilters.assignedTo && chatFilters.assignedTo !== 'all') {
+      params.assigned_to = chatFilters.assignedTo;
+    }
+    return params;
+  }, [chatFilters]);
 
   const resolvedPlatform = useMemo(() => {
     const normalized = (channel || 'all').toLowerCase();
@@ -97,6 +128,20 @@ const InboxContent = ({ user, onLogout }) => {
     }
   }, [lastMessage, handleWebSocketMessage]);
 
+  const handleFilterToggle = useCallback((key) => {
+    setChatFilters((prev) => ({
+      ...prev,
+      [key]: !prev[key]
+    }));
+  }, []);
+
+  const handleAssignedFilterChange = useCallback((value) => {
+    setChatFilters((prev) => ({
+      ...prev,
+      assignedTo: value
+    }));
+  }, []);
+
   const loadData = useCallback(
     async (platform) => {
       setLoading(true);
@@ -111,6 +156,7 @@ const InboxContent = ({ user, onLogout }) => {
         const timeout = 30000;
         const axiosConfig = { headers, timeout };
 
+        const filterParams = buildChatFilterParams();
         const [statsRes, agentsRes] = await Promise.all([
           axios.get(`${API}/dashboard/stats`, axiosConfig),
           canLoadAgentDirectory ? axios.get(`${API}/users/agents`, axiosConfig) : Promise.resolve({ data: [] })
@@ -118,7 +164,7 @@ const InboxContent = ({ user, onLogout }) => {
 
         setStats(statsRes.data);
         setAgents(agentsRes.data);
-        await loadChats(platform);
+        await loadChats(platform, filterParams);
       } catch (err) {
         console.error('Error loading data:', err);
         setError(err.response?.data?.detail || err.message || 'Failed to load data');
@@ -129,7 +175,7 @@ const InboxContent = ({ user, onLogout }) => {
         setLoading(false);
       }
     },
-    [canLoadAgentDirectory, loadChats, onLogout]
+    [buildChatFilterParams, canLoadAgentDirectory, loadChats, onLogout]
   );
 
   useEffect(() => {
@@ -177,7 +223,7 @@ const InboxContent = ({ user, onLogout }) => {
         { agent_id: agentId },
         { headers: { Authorization: `Bearer ${token}` } }
       );
-      await loadChats(selectedPlatform);
+      await loadChats(selectedPlatform, buildChatFilterParams());
       if (selectedChat?.id === chatId) {
         handleSelectChat(chatId);
       }
@@ -243,25 +289,41 @@ const InboxContent = ({ user, onLogout }) => {
           >
             Refresh
           </Button>
-          {canManageIntegrations && (
-            <>
-              <Button
-                onClick={() => setShowInstagramManager(true)}
-                variant="ghost"
-                className="inbox-action-btn"
-              >
-                <Instagram className="w-4 h-4 mr-2" />
-                Manage Instagram
-              </Button>
-              <Button
-                onClick={() => setShowFacebookManager(true)}
-                variant="ghost"
-                className="inbox-action-btn"
-              >
-                <Settings className="w-4 h-4 mr-2" />
-                Manage Facebook
-              </Button>
-            </>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            variant={chatFilters.unseen ? 'default' : 'ghost'}
+            className="inbox-action-btn"
+            onClick={() => handleFilterToggle('unseen')}
+          >
+            <EyeOff className="w-4 h-4 mr-2" />
+            Unseen
+          </Button>
+          <Button
+            type="button"
+            variant={chatFilters.notReplied ? 'default' : 'ghost'}
+            className="inbox-action-btn"
+            onClick={() => handleFilterToggle('notReplied')}
+          >
+            <CornerDownLeft className="w-4 h-4 mr-2 rotate-180" />
+            Needs reply
+          </Button>
+          {canViewAllChats && (
+            <Select value={chatFilters.assignedTo} onValueChange={handleAssignedFilterChange}>
+              <SelectTrigger className="min-w-[200px] bg-[var(--tg-surface)] border-[var(--tg-border-soft)] text-sm">
+                <SelectValue placeholder="Filter by agent" />
+              </SelectTrigger>
+              <SelectContent className="bg-[var(--tg-surface)] text-[var(--tg-text-primary)]">
+                <SelectItem value="all">All agents</SelectItem>
+                <SelectItem value="unassigned">Unassigned</SelectItem>
+                {agents.map((agent) => (
+                  <SelectItem key={agent.id} value={agent.id} disabled={!agent.is_active}>
+                    {agent.name} {agent.is_active ? '' : '(inactive)'}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           )}
         </div>
       </div>
@@ -288,15 +350,15 @@ const InboxContent = ({ user, onLogout }) => {
               <ChatSidebar
                 chats={chats}
                 selectedChatId={selectedChat?.id}
-                onSelectChat={(chatId) => {
-                  handleSelectChat(chatId);
-                  setMobileSidebarOpen(false);
-                }}
-                selectedPlatform={selectedPlatform}
-                loading={chatsLoading}
-                hideHeader
-                searchQuery={chatSearchQuery}
-                onSearchQueryChange={setChatSearchQuery}
+          onSelectChat={(chatId) => {
+            handleSelectChat(chatId);
+            setMobileSidebarOpen(false);
+          }}
+          selectedPlatform={selectedPlatform}
+          loading={chatsLoading}
+          hideHeader
+          searchQuery={chatSearchQuery}
+          onSearchQueryChange={setChatSearchQuery}
               />
             </div>
           </div>
@@ -343,8 +405,45 @@ const InboxContent = ({ user, onLogout }) => {
     />
   );
 
+  const sidebarExtras = useMemo(() => {
+    if (!canManageIntegrations) {
+      return null;
+    }
+    return (expanded) => (
+      <div className="space-y-3">
+        <div className="rounded-xl border border-[var(--tg-border-soft)] bg-[var(--tg-surface-muted)] px-3 py-2 text-xs text-[var(--tg-text-muted)]">
+          Manage connected pages and accounts
+        </div>
+          <div className="flex flex-col gap-2">
+            <Button
+              onClick={() => setShowInstagramManager(true)}
+              variant="ghost"
+              className={cn(
+                'app-nav-item w-full',
+                expanded ? 'justify-start' : 'justify-center px-2 py-2'
+              )}
+            >
+              <Instagram className="w-4 h-4 mr-2 text-pink-500" />
+              {expanded && <span>Manage Instagram</span>}
+            </Button>
+            <Button
+              onClick={() => setShowFacebookManager(true)}
+              variant="ghost"
+              className={cn(
+                'app-nav-item w-full',
+                expanded ? 'justify-start' : 'justify-center px-2 py-2'
+              )}
+            >
+              <Settings className="w-4 h-4 mr-2 text-blue-400" />
+              {expanded && <span>Manage Facebook</span>}
+            </Button>
+          </div>
+      </div>
+    );
+  }, [canManageIntegrations, setShowFacebookManager, setShowInstagramManager]);
+
   return (
-    <AppShell user={user} navItems={navigationItems} onLogout={onLogout}>
+    <AppShell user={user} navItems={navigationItems} onLogout={onLogout} sidebarExtras={sidebarExtras}>
       <InboxLayout
         statsSection={
           showError ? (
@@ -365,7 +464,15 @@ const InboxContent = ({ user, onLogout }) => {
               <div className="h-8 w-8 rounded-full border-t-2 border-b-2 border-purple-500 animate-spin" />
             </div>
           ) : (
-            <StatsCards stats={stats} />
+            <div className="rounded-2xl border border-[var(--tg-border-soft)] bg-[var(--tg-surface)] px-4 py-4 flex flex-wrap items-center justify-between gap-3">
+              <div className="text-sm text-[var(--tg-text-secondary)]">
+                <p className="font-semibold text-[var(--tg-text-primary)]">Need the numbers?</p>
+                <p>Conversation metrics moved to the Analytics page for a cleaner Inbox.</p>
+              </div>
+              <Button variant="outline" onClick={() => navigate('/stats')}>
+                Open Analytics
+              </Button>
+            </div>
           )
         }
         filterSection={renderFilters()}

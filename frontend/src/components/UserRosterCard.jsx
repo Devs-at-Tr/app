@@ -11,6 +11,8 @@ import {
   SelectTrigger,
   SelectValue
 } from './ui/select';
+import { Switch } from './ui/switch';
+import { Button } from './ui/button';
 
 const RolePill = ({ label }) => (
   <span className="px-2 py-0.5 rounded-full bg-[var(--tg-accent-soft)] text-[var(--tg-text-primary)] text-[11px] font-semibold">
@@ -46,14 +48,17 @@ const UserRosterCard = ({
   positions = [],
   positionsLoading = false,
   onAssignPosition,
+  onToggleActive,
+  canToggleActive = false,
 }) => {
   const [search, setSearch] = useState('');
 
   const stats = useMemo(() => {
     const totalUsers = users.length;
     const totalAssigned = users.reduce((sum, user) => sum + (user.assigned_chat_count || 0), 0);
-    const activeAgents = users.filter((user) => (user.assigned_chat_count || 0) > 0).length;
-    return { totalUsers, totalAssigned, activeAgents };
+    const activeUsers = users.filter((user) => user.is_active !== false).length;
+    const inactiveUsers = totalUsers - activeUsers;
+    return { totalUsers, totalAssigned, activeUsers, inactiveUsers };
   }, [users]);
 
   const filteredUsers = useMemo(() => {
@@ -70,6 +75,9 @@ const UserRosterCard = ({
       );
     });
   }, [users, search]);
+
+  const activeList = filteredUsers.filter((user) => user.is_active !== false);
+  const inactiveList = filteredUsers.filter((user) => user.is_active === false);
 
   return (
     <Card className="bg-[var(--tg-surface)] border border-[var(--tg-border-soft)] shadow-card">
@@ -94,7 +102,7 @@ const UserRosterCard = ({
         <div className="grid gap-3 pt-4 md:grid-cols-3">
           <SummaryStat icon={Users} label="Total Users" value={stats.totalUsers} />
           <SummaryStat icon={MessageSquare} label="Chats Assigned" value={stats.totalAssigned} />
-          <SummaryStat icon={Users} label="Active Agents" value={stats.activeAgents} />
+          <SummaryStat icon={Users} label="Active Users" value={stats.activeUsers} />
         </div>
         <div className="relative mt-4">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[var(--tg-text-muted)]" />
@@ -112,7 +120,7 @@ const UserRosterCard = ({
             {filteredUsers.length === 0 && !loading && (
               <div className="py-8 text-center text-[var(--tg-text-muted)] text-sm">No teammates match that search.</div>
             )}
-            {filteredUsers.map((user) => {
+            {activeList.map((user) => {
               const currentPositionId = user.position?.id || '__none__';
               const canEditRow = canAssignPositions && user.id !== currentUserId;
               return (
@@ -147,11 +155,46 @@ const UserRosterCard = ({
                         </SelectContent>
                       </Select>
                     )}
+                    {canToggleActive && (
+                      <div className="flex items-center gap-2 text-xs text-[var(--tg-text-muted)]">
+                        <span>Active</span>
+                        <Switch
+                          checked={user.is_active !== false}
+                          onCheckedChange={(checked) => onToggleActive?.(user.id, checked)}
+                        />
+                      </div>
+                    )}
                     <AssignedCount count={user.assigned_chat_count || 0} />
                   </div>
                 </div>
               );
             })}
+            {inactiveList.length > 0 && (
+              <div className="pt-6 space-y-3">
+                <p className="text-xs uppercase tracking-wide text-[var(--tg-text-muted)]">Inactive users</p>
+                {inactiveList.map((user) => (
+                  <div
+                    key={user.id}
+                    className="flex items-center justify-between gap-4 rounded-2xl border border-dashed border-[var(--tg-border-soft)] bg-[var(--tg-surface-muted)] px-4 py-3"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <p className="font-semibold text-[var(--tg-text-primary)] truncate">{user.name}</p>
+                      <p className="text-xs text-[var(--tg-text-muted)] truncate">{user.email || '-'}</p>
+                    </div>
+                    {canToggleActive && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => onToggleActive?.(user.id, true)}
+                        className="text-xs"
+                      >
+                        Activate
+                      </Button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </ScrollArea>
       </CardContent>

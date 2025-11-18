@@ -13,6 +13,7 @@ const PositionsPage = ({ user, onLogout }) => {
     [user]
   );
   const canInviteUsers = useMemo(() => hasPermission(user, 'user:invite'), [user]);
+  const canViewStats = useMemo(() => hasPermission(user, 'stats:view'), [user]);
 
   const navigationItems = useMemo(
     () =>
@@ -20,9 +21,10 @@ const PositionsPage = ({ user, onLogout }) => {
         canManageTemplates,
         canViewUserRoster,
         canManagePositions,
-        canInviteUsers
+        canInviteUsers,
+        canViewStats
       }),
-    [canManageTemplates, canViewUserRoster, canManagePositions, canInviteUsers]
+    [canManageTemplates, canViewUserRoster, canManagePositions, canInviteUsers, canViewStats]
   );
 
   return (

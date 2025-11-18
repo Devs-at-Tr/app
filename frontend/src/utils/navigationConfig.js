@@ -7,15 +7,17 @@ import {
   FileText,
   Users,
   Shield,
-  UserPlus
+  UserPlus,
+  Activity
 } from 'lucide-react';
 
 export const buildNavigationItems = ({
-  canManageTemplates,
-  canViewUserRoster,
-  canManagePositions,
-  canInviteUsers
-}) => {
+  canManageTemplates = false,
+  canViewUserRoster = false,
+  canManagePositions = false,
+  canInviteUsers = false,
+  canViewStats = false
+} = {}) => {
   const items = [
     { id: 'inbox', label: 'Direct Messages', icon: MessageCircle, to: '/inbox', exact: true },
     // { id: 'instagram', label: 'Instagram', icon: Instagram, to: '/inbox/instagram' }, // disabled
@@ -26,6 +28,10 @@ export const buildNavigationItems = ({
 
   if (canManageTemplates) {
     items.push({ id: 'templates', label: 'Templates', icon: FileText, to: '/templates' });
+  }
+
+  if (canViewStats) {
+    items.push({ id: 'stats', label: 'Analytics', icon: Activity, to: '/stats' });
   }
 
   if (canViewUserRoster) {

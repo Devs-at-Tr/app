@@ -133,7 +133,6 @@ const ChatSidebar = ({
         </div>
       </div>
       )}
-
       {/* Chat List */}
       <div className="flex-1 overflow-y-auto chat-scroll" data-testid="chat-list">
         {loading ? (

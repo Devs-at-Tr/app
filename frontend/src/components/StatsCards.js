@@ -1,5 +1,6 @@
 import React from 'react';
 import { MessageSquare, UserCheck, UserX, Activity, Instagram } from 'lucide-react';
+import { cn } from '../lib/utils';
 
 const FacebookIcon = ({ className }) => (
   <svg className={className} viewBox="0 0 24 24" fill="currentColor">
@@ -34,11 +35,11 @@ const StatCard = ({ icon: Icon, label, value, color, dataTestId, subStats }) => 
   );
 };
 
-const StatsCards = ({ stats }) => {
+const StatsCards = ({ stats, className = '' }) => {
   if (!stats) return null;
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4" data-testid="stats-cards">
+    <div className={cn('grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4', className)} data-testid="stats-cards">
       <StatCard
         icon={MessageSquare}
         label="Total Chats"
