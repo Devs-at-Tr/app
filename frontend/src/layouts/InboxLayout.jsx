@@ -18,13 +18,13 @@ const InboxLayout = ({
   filterSection,
   children,
 }) => (
-  <section className={cn('dashboard-page px-4 py-6 lg:px-8', className)}>
-    <div className="dashboard-header">
+  <section className={cn('dashboard-page px-2.5 py-3 sm:px-3 lg:px-4 h-full min-h-0 flex-1', className)}>
+    <div className="dashboard-header sticky top-0 z-20">
       {statsSection}
       {filterSection}
     </div>
-    <div className="dashboard-main flex-1 min-h-0">
-      <div className="flex-1 min-h-0 w-full">
+    <div className="dashboard-main flex-1 min-h-0 overflow-hidden">
+      <div className="flex-1 min-h-0 w-full h-full">
         {children}
       </div>
     </div>

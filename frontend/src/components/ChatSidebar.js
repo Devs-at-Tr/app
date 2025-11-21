@@ -1,8 +1,17 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import { Button } from './ui/button';
-import { RefreshCw, Search, Instagram } from 'lucide-react';
+import { RefreshCw, Search, Instagram, MoreHorizontal } from 'lucide-react';
 import { Input } from './ui/input';
 import { formatMessageTime, formatMessageDate } from '../utils/dateUtils';
+import { useIsMobile } from '../hooks/useMediaQuery';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger
+} from './ui/dropdown-menu';
 
 const getChatHandle = (chat) =>
   chat?.instagram_user?.username ||
@@ -35,6 +44,7 @@ const ChatSidebar = ({
 }) => {
   const [localSearch, setLocalSearch] = useState('');
   const searchQuery = controlledSearch ?? localSearch;
+  const isCompactList = useIsMobile();
 
   const totalUnread = useMemo(
     () => chats.reduce((count, chat) => count + (chat.unread_count || 0), 0),
@@ -98,12 +108,12 @@ const ChatSidebar = ({
   };
 
   return (
-    <div className="chat-panel h-full flex flex-col" data-testid="chat-sidebar">
+    <div className="chat-panel h-full flex flex-col min-h-0" data-testid="chat-sidebar">
       {!hideHeader && (
-        <div className="p-4 border-b border-gray-800">
-          <div className="flex items-center justify-between mb-3">
+        <div className="px-3 py-2.5 border-b border-gray-800 sticky top-0 z-10 bg-[var(--tg-surface)]">
+          <div className="flex items-center justify-between mb-1.5">
             <div className="flex items-center space-x-2">
-              <h2 className="text-lg font-bold text-white">Recent Chats</h2>
+              <h2 className="text-base font-semibold text-white leading-tight">Recent Chats</h2>
               {totalUnread > 0 && (
                 <span className="px-2 py-0.5 bg-purple-500 text-xs font-semibold text-white rounded-full" data-testid="chat-unread-count">
                   {totalUnread}
@@ -122,19 +132,19 @@ const ChatSidebar = ({
           </div>
           
           <div className="relative">
-          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-500" />
-          <Input
-            placeholder="Search chats..."
-            value={searchQuery}
-            onChange={(e) => handleSearchChange(e.target.value)}
-            className="pl-10 inbox-search-input inbox-search-input--compact"
-            data-testid="search-chats-input"
-          />
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-500" />
+            <Input
+              placeholder="Search chats..."
+              value={searchQuery}
+              onChange={(e) => handleSearchChange(e.target.value)}
+              className="pl-10 inbox-search-input inbox-search-input--compact"
+              data-testid="search-chats-input"
+            />
+          </div>
         </div>
-      </div>
       )}
       {/* Chat List */}
-      <div className="flex-1 overflow-y-auto chat-scroll" data-testid="chat-list">
+      <div className="flex-1 overflow-y-auto chat-scroll min-h-0" data-testid="chat-list">
         {loading ? (
           <div className="p-4 text-center">
             <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-purple-500 mx-auto"></div>
@@ -147,36 +157,75 @@ const ChatSidebar = ({
         ) : (
           filteredChats.map((chat) => {
             const displayName = getChatDisplayName(chat);
+            const lastActivityLabel = getLastActivityLabel(chat);
             return (
               <div
                 key={chat.id}
                 onClick={() => handleSelect(chat.id)}
-              className={`chat-item p-4 border-b border-gray-800 ${
-                isSelected(chat.id) ? 'active' : ''
-              } ${
-                chat.unread_count > 0 && !isSelected(chat.id) ? 'has-unread' : ''
-              }`}
+                className={`chat-item px-3 py-2.5 border-b border-gray-800 ${
+                  isSelected(chat.id) ? 'active' : ''
+                } ${
+                  chat.unread_count > 0 && !isSelected(chat.id) ? 'has-unread' : ''
+                }`}
               data-testid={`chat-item-${chat.id}`}
             >
-              <div className="flex items-start justify-between gap-2">
+              <div className="flex items-start justify-between gap-2 w-full">
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center space-x-2 mb-1">
+                  <div className="flex items-center gap-2 mb-1.5">
                     {getPlatformBadge(chat.platform)}
-                    <h3 className="text-white font-semibold truncate">{displayName}</h3>
+                    <h3 className="text-white font-semibold truncate text-[13px] leading-tight">{displayName}</h3>
                     {chat.unread_count > 0 && (
                       <span className="px-2 py-0.5 bg-purple-500 text-white text-xs font-semibold rounded-full">
                         {chat.unread_count}
                       </span>
                     )}
                   </div>
-                  <p className="text-sm text-gray-400 truncate">{chat.last_message || 'No messages'}</p>
-                  {chat.assigned_agent && (
-                    <p className="text-xs text-purple-400 mt-1">Assigned: {chat.assigned_agent.name}</p>
+                  <p className="text-[12px] text-gray-400 truncate leading-snug">{chat.last_message || 'No messages'}</p>
+                  {!isCompactList && (
+                    <p className="text-[11px] text-purple-400 mt-0.5">
+                      {chat.assigned_agent ? `Assigned: ${chat.assigned_agent.name}` : 'Unassigned'}
+                    </p>
                   )}
                 </div>
-                <span className="text-xs text-gray-500 whitespace-nowrap">
-                  {getLastActivityLabel(chat)}
-                </span>
+                {isCompactList ? (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="text-gray-400 hover:text-white flex-shrink-0 h-8 w-8"
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        <MoreHorizontal className="w-4 h-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent
+                      align="end"
+                      sideOffset={6}
+                      className="w-56 bg-[var(--tg-surface)] border border-[var(--tg-border-soft)] text-[var(--tg-text-primary)]"
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      <DropdownMenuLabel className="text-xs uppercase tracking-wide text-[var(--tg-text-muted)]">
+                        Chat details
+                      </DropdownMenuLabel>
+                      <DropdownMenuSeparator className="bg-[var(--tg-border-soft)]" />
+                      <DropdownMenuItem className="flex flex-col items-start gap-0.5 focus:bg-transparent" onSelect={(event) => event.preventDefault()}>
+                        <span className="text-sm">
+                          {chat.assigned_agent?.name || 'Unassigned'}
+                        </span>
+                        <span className="text-xs text-[var(--tg-text-muted)]">Assigned agent</span>
+                      </DropdownMenuItem>
+                      {lastActivityLabel && (
+                        <DropdownMenuItem className="flex flex-col items-start gap-0.5 focus:bg-transparent" onSelect={(event) => event.preventDefault()}>
+                          <span className="text-sm">{lastActivityLabel}</span>
+                          <span className="text-xs text-[var(--tg-text-muted)]">Last activity</span>
+                        </DropdownMenuItem>
+                      )}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                ) : (
+                  <span className="text-[11px] text-gray-500 whitespace-nowrap">{lastActivityLabel}</span>
+                )}
               </div>
               </div>
             );

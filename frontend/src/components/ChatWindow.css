@@ -42,7 +42,7 @@
   cursor: pointer;
   transition: all 0.2s ease;
   background-color: transparent;
-  border-left: 3px solid transparent;
+  border-left: 2px solid transparent;
   border-bottom: 1px solid rgba(255, 255, 255, 0.03);
   position: relative;
 }

@@ -85,3 +85,5 @@ agenthub/agents/youtube/db
 android-sdk/ 
 
 .env
+
+public/

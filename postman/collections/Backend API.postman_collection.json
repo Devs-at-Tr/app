@@ -1,0 +1,1453 @@
+{
+  "info": {
+    "name": "Backend API",
+    "description": "Comprehensive API documentation for the backend server including Authentication, User Management, Instagram, Facebook, Chats, Templates, and Dashboard endpoints.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{auth_token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8000",
+      "type": "string"
+    },
+    {
+      "key": "auth_token",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Authentication",
+      "description": "Authentication endpoints for user registration, login, password management, and profile access.",
+      "item": [
+        {
+          "name": "Register User (Admin)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"user@example.com\",\n  \"password\": \"SecurePassword123!\",\n  \"full_name\": \"John Doe\",\n  \"role\": \"agent\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/auth/register",
+              "host": ["{{base_url}}"],
+              "path": ["api", "auth", "register"]
+            },
+            "description": "Register a new user (admin only). Requires admin authentication."
+          }
+        },
+        {
+          "name": "Public Agent Signup",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"agent@example.com\",\n  \"password\": \"SecurePassword123!\",\n  \"full_name\": \"Jane Agent\",\n  \"role\": \"agent\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/auth/signup",
+              "host": ["{{base_url}}"],
+              "path": ["api", "auth", "signup"]
+            },
+            "description": "Public agent signup endpoint (if enabled in configuration)."
+          }
+        },
+        {
+          "name": "Get Auth Config",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/auth/config",
+              "host": ["{{base_url}}"],
+              "path": ["api", "auth", "config"]
+            },
+            "description": "Get authentication configuration including public signup and forgot password settings."
+          }
+        },
+        {
+          "name": "Forgot Password",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"user@example.com\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/auth/forgot-password",
+              "host": ["{{base_url}}"],
+              "path": ["api", "auth", "forgot-password"]
+            },
+            "description": "Request a password reset link to be sent to the user's email."
+          }
+        },
+        {
+          "name": "Reset Password",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"reset_token_here\",\n  \"new_password\": \"NewSecurePassword123!\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/auth/reset-password",
+              "host": ["{{base_url}}"],
+              "path": ["api", "auth", "reset-password"]
+            },
+            "description": "Reset password using the token received via email."
+          }
+        },
+        {
+          "name": "Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    const response = pm.response.json();",
+                  "    pm.collectionVariables.set('auth_token', response.access_token);",
+                  "    console.log('Auth token saved to collection variable');",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"user@example.com\",\n  \"password\": \"SecurePassword123!\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/auth/login",
+              "host": ["{{base_url}}"],
+              "path": ["api", "auth", "login"]
+            },
+            "description": "Login and receive JWT token. The token is automatically saved to the collection variable."
+          }
+        },
+        {
+          "name": "Get Current User",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/auth/me",
+              "host": ["{{base_url}}"],
+              "path": ["api", "auth", "me"]
+            },
+            "description": "Get current authenticated user profile information."
+          }
+        }
+      ]
+    },
+    {
+      "name": "User Management",
+      "description": "Endpoints for managing users, agents, and user roster.",
+      "item": [
+        {
+          "name": "List All Users",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/users",
+              "host": ["{{base_url}}"],
+              "path": ["api", "users"]
+            },
+            "description": "List all users in the system (admin only)."
+          }
+        },
+        {
+          "name": "List Assignable Agents",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/users/agents?include_inactive=false",
+              "host": ["{{base_url}}"],
+              "path": ["api", "users", "agents"],
+              "query": [
+                {
+                  "key": "include_inactive",
+                  "value": "false",
+                  "description": "Include inactive agents in the list"
+                }
+              ]
+            },
+            "description": "List all assignable agents for chat assignment."
+          }
+        },
+        {
+          "name": "Get User Roster",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/users/roster",
+              "host": ["{{base_url}}"],
+              "path": ["api", "users", "roster"]
+            },
+            "description": "Get user roster with assigned chat counts for each agent."
+          }
+        },
+        {
+          "name": "Update User Active State",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"is_active\": true\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/users/:user_id/active",
+              "host": ["{{base_url}}"],
+              "path": ["api", "users", ":user_id", "active"],
+              "variable": [
+                {
+                  "key": "user_id",
+                  "value": "user_id_here"
+                }
+              ]
+            },
+            "description": "Update user active/inactive state."
+          }
+        },
+        {
+          "name": "Create User (Admin)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"newuser@example.com\",\n  \"password\": \"SecurePassword123!\",\n  \"full_name\": \"New User\",\n  \"role\": \"agent\",\n  \"is_active\": true\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/admin/users",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "users"]
+            },
+            "description": "Create a new user (admin only)."
+          }
+        },
+        {
+          "name": "Assign Position to User",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"position_id\": \"position_id_here\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/users/:user_id/position",
+              "host": ["{{base_url}}"],
+              "path": ["api", "users", ":user_id", "position"],
+              "variable": [
+                {
+                  "key": "user_id",
+                  "value": "user_id_here"
+                }
+              ]
+            },
+            "description": "Assign a position to a user."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Position Management",
+      "description": "Endpoints for managing positions and permissions.",
+      "item": [
+        {
+          "name": "List Positions",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/positions",
+              "host": ["{{base_url}}"],
+              "path": ["api", "positions"]
+            },
+            "description": "List all positions (requires permission)."
+          }
+        },
+        {
+          "name": "Create Position",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Senior Agent\",\n  \"description\": \"Senior customer support agent\",\n  \"permissions\": [\"chat.view\", \"chat.assign\", \"chat.message\"]\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/positions",
+              "host": ["{{base_url}}"],
+              "path": ["api", "positions"]
+            },
+            "description": "Create a new position with specified permissions."
+          }
+        },
+        {
+          "name": "Update Position",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Updated Position Name\",\n  \"description\": \"Updated description\",\n  \"permissions\": [\"chat.view\", \"chat.assign\"]\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/positions/:position_id",
+              "host": ["{{base_url}}"],
+              "path": ["api", "positions", ":position_id"],
+              "variable": [
+                {
+                  "key": "position_id",
+                  "value": "position_id_here"
+                }
+              ]
+            },
+            "description": "Update an existing position."
+          }
+        },
+        {
+          "name": "Delete Position",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/positions/:position_id",
+              "host": ["{{base_url}}"],
+              "path": ["api", "positions", ":position_id"],
+              "variable": [
+                {
+                  "key": "position_id",
+                  "value": "position_id_here"
+                }
+              ]
+            },
+            "description": "Delete a position."
+          }
+        },
+        {
+          "name": "Get Permission Codes",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/permissions/codes",
+              "host": ["{{base_url}}"],
+              "path": ["api", "permissions", "codes"]
+            },
+            "description": "List all available permission codes and their definitions."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Instagram",
+      "description": "Instagram integration endpoints for comments, mentions, insights, and account management.",
+      "item": [
+        {
+          "name": "Comments",
+          "description": "Instagram comment management endpoints.",
+          "item": [
+            {
+              "name": "List Comments",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/api/instagram/comments",
+                  "host": ["{{base_url}}"],
+                  "path": ["api", "instagram", "comments"]
+                },
+                "description": "List all Instagram comments for connected accounts."
+              }
+            },
+            {
+              "name": "Reply to Comment",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"text\": \"Thank you for your comment!\"\n}"
+                },
+                "url": {
+                  "raw": "{{base_url}}/api/instagram/comments/:comment_id/reply",
+                  "host": ["{{base_url}}"],
+                  "path": ["api", "instagram", "comments", ":comment_id", "reply"],
+                  "variable": [
+                    {
+                      "key": "comment_id",
+                      "value": "comment_id_here"
+                    }
+                  ]
+                },
+                "description": "Reply to an Instagram comment."
+              }
+            },
+            {
+              "name": "Create Comment",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"media_id\": \"media_id_here\",\n  \"message\": \"Great post!\"\n}"
+                },
+                "url": {
+                  "raw": "{{base_url}}/api/comments/create",
+                  "host": ["{{base_url}}"],
+                  "path": ["api", "comments", "create"]
+                },
+                "description": "Create a comment on an Instagram media item."
+              }
+            },
+            {
+              "name": "Hide/Unhide Comment",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"comment_id\": \"comment_id_here\",\n  \"hide\": true\n}"
+                },
+                "url": {
+                  "raw": "{{base_url}}/api/comments/hide",
+                  "host": ["{{base_url}}"],
+                  "path": ["api", "comments", "hide"]
+                },
+                "description": "Hide or unhide an Instagram comment."
+              }
+            },
+            {
+              "name": "Delete Comment",
+              "request": {
+                "method": "DELETE",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/api/comments/delete?comment_id=comment_id_here",
+                  "host": ["{{base_url}}"],
+                  "path": ["api", "comments", "delete"],
+                  "query": [
+                    {
+                      "key": "comment_id",
+                      "value": "comment_id_here"
+                    }
+                  ]
+                },
+                "description": "Delete an Instagram comment."
+              }
+            }
+          ]
+        },
+        {
+          "name": "Mentions & Insights",
+          "description": "Instagram mentions and insights endpoints.",
+          "item": [
+            {
+              "name": "Get Mentions",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/api/instagram/mentions?ig_user_id=",
+                  "host": ["{{base_url}}"],
+                  "path": ["api", "instagram", "mentions"],
+                  "query": [
+                    {
+                      "key": "ig_user_id",
+                      "value": "",
+                      "description": "Optional Instagram user ID"
+                    }
+                  ]
+                },
+                "description": "Fetch media where the business account is mentioned."
+              }
+            },
+            {
+              "name": "Get Account Insights",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/api/insights/account?ig_user_id=&metrics=impressions,reach&period=day",
+                  "host": ["{{base_url}}"],
+                  "path": ["api", "insights", "account"],
+                  "query": [
+                    {
+                      "key": "ig_user_id",
+                      "value": ""
+                    },
+                    {
+                      "key": "metrics",
+                      "value": "impressions,reach"
+                    },
+                    {
+                      "key": "period",
+                      "value": "day"
+                    }
+                  ]
+                },
+                "description": "Fetch account-level Instagram insights."
+              }
+            },
+            {
+              "name": "Get Media Insights",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/api/insights/media?media_id=&metrics=engagement,impressions",
+                  "host": ["{{base_url}}"],
+                  "path": ["api", "insights", "media"],
+                  "query": [
+                    {
+                      "key": "media_id",
+                      "value": ""
+                    },
+                    {
+                      "key": "metrics",
+                      "value": "engagement,impressions"
+                    }
+                  ]
+                },
+                "description": "Fetch media-level Instagram insights."
+              }
+            },
+            {
+              "name": "Get Story Insights",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/api/insights/story?story_id=&metrics=impressions,reach",
+                  "host": ["{{base_url}}"],
+                  "path": ["api", "insights", "story"],
+                  "query": [
+                    {
+                      "key": "story_id",
+                      "value": ""
+                    },
+                    {
+                      "key": "metrics",
+                      "value": "impressions,reach"
+                    }
+                  ]
+                },
+                "description": "Fetch story-level Instagram insights."
+              }
+            }
+          ]
+        },
+        {
+          "name": "Marketing & Events",
+          "description": "Instagram marketing and conversion events.",
+          "item": [
+            {
+              "name": "Send Marketing Event",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"event_name\": \"Purchase\",\n  \"event_time\": 1234567890,\n  \"user_data\": {\n    \"email\": \"user@example.com\"\n  },\n  \"custom_data\": {\n    \"value\": 99.99,\n    \"currency\": \"USD\"\n  }\n}"
+                },
+                "url": {
+                  "raw": "{{base_url}}/api/marketing/events",
+                  "host": ["{{base_url}}"],
+                  "path": ["api", "marketing", "events"]
+                },
+                "description": "Send marketing event to Meta Conversions API."
+              }
+            }
+          ]
+        },
+        {
+          "name": "Account Management",
+          "description": "Instagram account connection and management.",
+          "item": [
+            {
+              "name": "Connect Instagram Account",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"instagram_business_account_id\": \"ig_account_id\",\n  \"access_token\": \"access_token_here\",\n  \"page_id\": \"facebook_page_id\"\n}"
+                },
+                "url": {
+                  "raw": "{{base_url}}/api/instagram/accounts",
+                  "host": ["{{base_url}}"],
+                  "path": ["api", "instagram", "accounts"]
+                },
+                "description": "Connect an Instagram Business Account (admin only)."
+              }
+            },
+            {
+              "name": "List Instagram Accounts",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/api/instagram/accounts",
+                  "host": ["{{base_url}}"],
+                  "path": ["api", "instagram", "accounts"]
+                },
+                "description": "List all connected Instagram accounts (admin only)."
+              }
+            },
+            {
+              "name": "Get Instagram Account",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/api/instagram/accounts/:account_id",
+                  "host": ["{{base_url}}"],
+                  "path": ["api", "instagram", "accounts", ":account_id"],
+                  "variable": [
+                    {
+                      "key": "account_id",
+                      "value": "account_id_here"
+                    }
+                  ]
+                },
+                "description": "Get a specific Instagram account (admin only)."
+              }
+            },
+            {
+              "name": "Delete Instagram Account",
+              "request": {
+                "method": "DELETE",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/api/instagram/accounts/:account_id",
+                  "host": ["{{base_url}}"],
+                  "path": ["api", "instagram", "accounts", ":account_id"],
+                  "variable": [
+                    {
+                      "key": "account_id",
+                      "value": "account_id_here"
+                    }
+                  ]
+                },
+                "description": "Delete/disconnect an Instagram account (admin only)."
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Facebook",
+      "description": "Facebook integration endpoints for comments and page management.",
+      "item": [
+        {
+          "name": "Comments",
+          "description": "Facebook comment management.",
+          "item": [
+            {
+              "name": "List Facebook Comments",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/api/facebook/comments",
+                  "host": ["{{base_url}}"],
+                  "path": ["api", "facebook", "comments"]
+                },
+                "description": "List Facebook comments in a chat-friendly format."
+              }
+            },
+            {
+              "name": "Reply to Facebook Comment",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"text\": \"Thank you for your feedback!\"\n}"
+                },
+                "url": {
+                  "raw": "{{base_url}}/api/facebook/comments/:comment_id/reply",
+                  "host": ["{{base_url}}"],
+                  "path": ["api", "facebook", "comments", ":comment_id", "reply"],
+                  "variable": [
+                    {
+                      "key": "comment_id",
+                      "value": "comment_id_here"
+                    }
+                  ]
+                },
+                "description": "Reply to a Facebook comment."
+              }
+            }
+          ]
+        },
+        {
+          "name": "Page Management",
+          "description": "Facebook page connection and management.",
+          "item": [
+            {
+              "name": "Connect Facebook Page",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"page_id\": \"facebook_page_id\",\n  \"access_token\": \"page_access_token\",\n  \"page_name\": \"My Business Page\"\n}"
+                },
+                "url": {
+                  "raw": "{{base_url}}/api/facebook/pages",
+                  "host": ["{{base_url}}"],
+                  "path": ["api", "facebook", "pages"]
+                },
+                "description": "Connect a Facebook page (admin only)."
+              }
+            },
+            {
+              "name": "List Facebook Pages",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/api/facebook/pages",
+                  "host": ["{{base_url}}"],
+                  "path": ["api", "facebook", "pages"]
+                },
+                "description": "List all connected Facebook pages."
+              }
+            },
+            {
+              "name": "Get Facebook Page",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/api/facebook/pages/:page_id",
+                  "host": ["{{base_url}}"],
+                  "path": ["api", "facebook", "pages", ":page_id"],
+                  "variable": [
+                    {
+                      "key": "page_id",
+                      "value": "page_id_here"
+                    }
+                  ]
+                },
+                "description": "Get a specific Facebook page."
+              }
+            },
+            {
+              "name": "Update Facebook Page",
+              "request": {
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"page_name\": \"Updated Page Name\",\n  \"is_active\": true\n}"
+                },
+                "url": {
+                  "raw": "{{base_url}}/api/facebook/pages/:page_id",
+                  "host": ["{{base_url}}"],
+                  "path": ["api", "facebook", "pages", ":page_id"],
+                  "variable": [
+                    {
+                      "key": "page_id",
+                      "value": "page_id_here"
+                    }
+                  ]
+                },
+                "description": "Update a Facebook page."
+              }
+            },
+            {
+              "name": "Delete Facebook Page",
+              "request": {
+                "method": "DELETE",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/api/facebook/pages/:page_id",
+                  "host": ["{{base_url}}"],
+                  "path": ["api", "facebook", "pages", ":page_id"],
+                  "variable": [
+                    {
+                      "key": "page_id",
+                      "value": "page_id_here"
+                    }
+                  ]
+                },
+                "description": "Delete a Facebook page."
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Chats",
+      "description": "Chat management endpoints for viewing, assigning, and messaging.",
+      "item": [
+        {
+          "name": "List Chats",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/chats?status_filter=&assigned_to_me=false&platform=&assigned_to=&unseen=false&not_replied=false",
+              "host": ["{{base_url}}"],
+              "path": ["api", "chats"],
+              "query": [
+                {
+                  "key": "status_filter",
+                  "value": "",
+                  "description": "Filter by status (open, closed, pending)"
+                },
+                {
+                  "key": "assigned_to_me",
+                  "value": "false",
+                  "description": "Show only chats assigned to me"
+                },
+                {
+                  "key": "platform",
+                  "value": "",
+                  "description": "Filter by platform (instagram, facebook)"
+                },
+                {
+                  "key": "assigned_to",
+                  "value": "",
+                  "description": "Filter by assigned user ID"
+                },
+                {
+                  "key": "unseen",
+                  "value": "false",
+                  "description": "Show only unseen chats"
+                },
+                {
+                  "key": "not_replied",
+                  "value": "false",
+                  "description": "Show only chats not replied to"
+                }
+              ]
+            },
+            "description": "List chats with various filters including status, platform, assignment, and read status."
+          }
+        },
+        {
+          "name": "Get Chat Details",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/chats/:chat_id",
+              "host": ["{{base_url}}"],
+              "path": ["api", "chats", ":chat_id"],
+              "variable": [
+                {
+                  "key": "chat_id",
+                  "value": "chat_id_here"
+                }
+              ]
+            },
+            "description": "Get chat details including all messages."
+          }
+        },
+        {
+          "name": "Assign Chat",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"assigned_to\": \"user_id_here\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/chats/:chat_id/assign",
+              "host": ["{{base_url}}"],
+              "path": ["api", "chats", ":chat_id", "assign"],
+              "variable": [
+                {
+                  "key": "chat_id",
+                  "value": "chat_id_here"
+                }
+              ]
+            },
+            "description": "Assign a chat to an agent."
+          }
+        },
+        {
+          "name": "Mark Chat as Read",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/chats/:chat_id/mark_read",
+              "host": ["{{base_url}}"],
+              "path": ["api", "chats", ":chat_id", "mark_read"],
+              "variable": [
+                {
+                  "key": "chat_id",
+                  "value": "chat_id_here"
+                }
+              ]
+            },
+            "description": "Mark a chat as read by the current user."
+          }
+        },
+        {
+          "name": "Send Message",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"Hello! How can I help you today?\",\n  \"message_type\": \"text\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/chats/:chat_id/message",
+              "host": ["{{base_url}}"],
+              "path": ["api", "chats", ":chat_id", "message"],
+              "variable": [
+                {
+                  "key": "chat_id",
+                  "value": "chat_id_here"
+                }
+              ]
+            },
+            "description": "Send a message in a chat."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Templates",
+      "description": "Message template management and sending.",
+      "item": [
+        {
+          "name": "List Templates",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/templates?platform=&category=",
+              "host": ["{{base_url}}"],
+              "path": ["api", "templates"],
+              "query": [
+                {
+                  "key": "platform",
+                  "value": "",
+                  "description": "Filter by platform (instagram, facebook)"
+                },
+                {
+                  "key": "category",
+                  "value": "",
+                  "description": "Filter by category"
+                }
+              ]
+            },
+            "description": "List all templates with optional filters by platform and category."
+          }
+        },
+        {
+          "name": "Create Template",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Welcome Message\",\n  \"content\": \"Welcome to our service! How can we help you today?\",\n  \"platform\": \"instagram\",\n  \"category\": \"greeting\",\n  \"language\": \"en\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/templates",
+              "host": ["{{base_url}}"],
+              "path": ["api", "templates"]
+            },
+            "description": "Create a new message template (admin only)."
+          }
+        },
+        {
+          "name": "Update Template",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Updated Template Name\",\n  \"content\": \"Updated template content\",\n  \"category\": \"updated_category\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/templates/:template_id",
+              "host": ["{{base_url}}"],
+              "path": ["api", "templates", ":template_id"],
+              "variable": [
+                {
+                  "key": "template_id",
+                  "value": "template_id_here"
+                }
+              ]
+            },
+            "description": "Update an existing template (admin only)."
+          }
+        },
+        {
+          "name": "Delete Template",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/templates/:template_id",
+              "host": ["{{base_url}}"],
+              "path": ["api", "templates", ":template_id"],
+              "variable": [
+                {
+                  "key": "template_id",
+                  "value": "template_id_here"
+                }
+              ]
+            },
+            "description": "Delete a template (admin only)."
+          }
+        },
+        {
+          "name": "Submit Template to Meta",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/templates/:template_id/submit-to-meta",
+              "host": ["{{base_url}}"],
+              "path": ["api", "templates", ":template_id", "submit-to-meta"],
+              "variable": [
+                {
+                  "key": "template_id",
+                  "value": "template_id_here"
+                }
+              ]
+            },
+            "description": "Submit a template for Meta approval (admin only)."
+          }
+        },
+        {
+          "name": "Check Meta Template Status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/templates/:template_id/meta-status",
+              "host": ["{{base_url}}"],
+              "path": ["api", "templates", ":template_id", "meta-status"],
+              "variable": [
+                {
+                  "key": "template_id",
+                  "value": "template_id_here"
+                }
+              ]
+            },
+            "description": "Check Meta approval status of a template (admin only)."
+          }
+        },
+        {
+          "name": "Send Template Message",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"chat_id\": \"chat_id_here\",\n  \"variables\": {\n    \"name\": \"John\",\n    \"order_id\": \"12345\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/templates/:template_id/send",
+              "host": ["{{base_url}}"],
+              "path": ["api", "templates", ":template_id", "send"],
+              "variable": [
+                {
+                  "key": "template_id",
+                  "value": "template_id_here"
+                }
+              ]
+            },
+            "description": "Send a template message to a chat with variable substitution."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Dashboard",
+      "description": "Dashboard statistics and analytics.",
+      "item": [
+        {
+          "name": "Get Dashboard Stats",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/dashboard/stats",
+              "host": ["{{base_url}}"],
+              "path": ["api", "dashboard", "stats"]
+            },
+            "description": "Get dashboard statistics including chat counts, message counts, and agent metrics."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Developer Utilities",
+      "description": "Developer and admin utilities.",
+      "item": [
+        {
+          "name": "Get Database Overview",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/dev/db-overview",
+              "host": ["{{base_url}}"],
+              "path": ["api", "dev", "db-overview"]
+            },
+            "description": "Get database overview and schema changes (super admin only)."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Mock Data & Testing",
+      "description": "Endpoints for generating mock data and testing.",
+      "item": [
+        {
+          "name": "Generate Mock Chats",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"count\": 10,\n  \"platform\": \"instagram\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/mock/generate-chats",
+              "host": ["{{base_url}}"],
+              "path": ["api", "mock", "generate-chats"]
+            },
+            "description": "Generate mock chats for testing purposes."
+          }
+        },
+        {
+          "name": "Simulate Incoming Message",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"chat_id\": \"chat_id_here\",\n  \"message\": \"This is a test message\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/mock/simulate-message",
+              "host": ["{{base_url}}"],
+              "path": ["api", "mock", "simulate-message"]
+            },
+            "description": "Simulate an incoming message in a chat for testing."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Webhooks",
+      "description": "Webhook endpoints for Instagram and Facebook integrations.",
+      "item": [
+        {
+          "name": "Instagram Webhook Verification",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/webhooks/instagram?hub.mode=subscribe&hub.challenge=challenge_string&hub.verify_token=your_verify_token",
+              "host": ["{{base_url}}"],
+              "path": ["api", "webhooks", "instagram"],
+              "query": [
+                {
+                  "key": "hub.mode",
+                  "value": "subscribe"
+                },
+                {
+                  "key": "hub.challenge",
+                  "value": "challenge_string"
+                },
+                {
+                  "key": "hub.verify_token",
+                  "value": "your_verify_token"
+                }
+              ]
+            },
+            "description": "Verify Instagram webhook subscription."
+          }
+        },
+        {
+          "name": "Instagram Webhook Handler",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"object\": \"instagram\",\n  \"entry\": []\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/webhooks/instagram",
+              "host": ["{{base_url}}"],
+              "path": ["api", "webhooks", "instagram"]
+            },
+            "description": "Handle incoming Instagram webhook events."
+          }
+        },
+        {
+          "name": "Meta Webhook Verification",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/webhook?hub.mode=subscribe&hub.challenge=challenge_string&hub.verify_token=your_verify_token",
+              "host": ["{{base_url}}"],
+              "path": ["webhook"],
+              "query": [
+                {
+                  "key": "hub.mode",
+                  "value": "subscribe"
+                },
+                {
+                  "key": "hub.challenge",
+                  "value": "challenge_string"
+                },
+                {
+                  "key": "hub.verify_token",
+                  "value": "your_verify_token"
+                }
+              ]
+            },
+            "description": "Meta webhook verification handler for Instagram DMs."
+          }
+        },
+        {
+          "name": "Unified Meta Webhook",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"object\": \"page\",\n  \"entry\": []\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/webhook",
+              "host": ["{{base_url}}"],
+              "path": ["webhook"]
+            },
+            "description": "Unified webhook entrypoint for Meta subscriptions."
+          }
+        },
+        {
+          "name": "Facebook Webhook Verification",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/webhooks/facebook?hub.mode=subscribe&hub.challenge=challenge_string&hub.verify_token=your_verify_token",
+              "host": ["{{base_url}}"],
+              "path": ["api", "webhooks", "facebook"],
+              "query": [
+                {
+                  "key": "hub.mode",
+                  "value": "subscribe"
+                },
+                {
+                  "key": "hub.challenge",
+                  "value": "challenge_string"
+                },
+                {
+                  "key": "hub.verify_token",
+                  "value": "your_verify_token"
+                }
+              ]
+            },
+            "description": "Verify Facebook webhook subscription."
+          }
+        },
+        {
+          "name": "Facebook Webhook Handler",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"object\": \"page\",\n  \"entry\": []\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/webhooks/facebook",
+              "host": ["{{base_url}}"],
+              "path": ["api", "webhooks", "facebook"]
+            },
+            "description": "Handle incoming Facebook webhook events."
+          }
+        }
+      ]
+    }
+  ]
+}

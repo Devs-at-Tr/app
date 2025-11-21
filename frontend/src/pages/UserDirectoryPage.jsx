@@ -17,6 +17,7 @@ const UserDirectoryPage = ({ user, onLogout }) => {
   const navigate = useNavigate();
 
   const canManageTemplates = useMemo(() => hasPermission(user, 'template:manage'), [user]);
+  const canManageIntegrations = useMemo(() => hasPermission(user, 'integration:manage'), [user]);
   const canManagePositions = useMemo(() => hasPermission(user, 'position:manage'), [user]);
   const canViewUserRoster = useMemo(
     () => hasAnyPermission(user, ['position:assign', 'position:manage', 'chat:assign']),
@@ -33,9 +34,17 @@ const UserDirectoryPage = ({ user, onLogout }) => {
         canViewUserRoster,
         canManagePositions,
         canInviteUsers,
-        canViewStats
+        canViewStats,
+        canManageIntegrations
       }),
-    [canManageTemplates, canViewUserRoster, canManagePositions, canInviteUsers, canViewStats]
+    [
+      canManageTemplates,
+      canViewUserRoster,
+      canManagePositions,
+      canInviteUsers,
+      canViewStats,
+      canManageIntegrations
+    ]
   );
 
   const loadUserRoster = useCallback(async () => {

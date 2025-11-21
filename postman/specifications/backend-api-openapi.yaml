@@ -1,0 +1,1253 @@
+openapi: 3.0.3
+info:
+  title: Backend API
+  description: |
+    Comprehensive API documentation for the backend server including Authentication, User Management, 
+    Instagram, Facebook, Chats, Templates, and Dashboard endpoints.
+    
+    ## Authentication
+    Most endpoints require Bearer token authentication. Obtain a token by calling the `/api/auth/login` endpoint.
+    
+    ## Features
+    - **Authentication**: User registration, login, password reset
+    - **User Management**: User and agent management with role-based permissions
+    - **Position Management**: Role and permission management
+    - **Instagram Integration**: Comments, mentions, insights, and account management
+    - **Facebook Integration**: Comments and page management
+    - **Chat Management**: Real-time chat handling with assignment and messaging
+    - **Templates**: Message template management and Meta approval workflow
+    - **Dashboard**: Analytics and statistics
+    - **Webhooks**: Instagram and Facebook webhook handlers
+    - **WebSocket**: Real-time updates
+  version: 1.0.0
+  contact:
+    name: API Support
+    email: support@example.com
+
+servers:
+  - url: http://localhost:8000
+    description: Local development server
+  - url: https://api.example.com
+    description: Production server
+
+tags:
+  - name: Authentication
+    description: User authentication and authorization
+  - name: User Management
+    description: User and agent management
+  - name: Position Management
+    description: Position and permission management
+  - name: Instagram
+    description: Instagram integration endpoints
+  - name: Facebook
+    description: Facebook integration endpoints
+  - name: Chats
+    description: Chat management and messaging
+  - name: Templates
+    description: Message template management
+  - name: Dashboard
+    description: Dashboard statistics
+  - name: Developer
+    description: Developer utilities
+  - name: Mock & Testing
+    description: Mock data generation and testing
+  - name: Webhooks
+    description: Webhook handlers
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT token obtained from login endpoint
+
+  schemas:
+    UserRegister:
+      type: object
+      required:
+        - email
+        - password
+        - full_name
+      properties:
+        email:
+          type: string
+          format: email
+          example: user@example.com
+        password:
+          type: string
+          format: password
+          minLength: 8
+          example: SecurePassword123!
+        full_name:
+          type: string
+          example: John Doe
+        role:
+          type: string
+          enum: [admin, agent, viewer]
+          default: agent
+
+    UserLogin:
+      type: object
+      required:
+        - email
+        - password
+      properties:
+        email:
+          type: string
+          format: email
+          example: user@example.com
+        password:
+          type: string
+          format: password
+          example: SecurePassword123!
+
+    TokenResponse:
+      type: object
+      properties:
+        access_token:
+          type: string
+          example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+        token_type:
+          type: string
+          example: bearer
+
+    UserResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        full_name:
+          type: string
+        role:
+          type: string
+          enum: [admin, agent, viewer]
+        is_active:
+          type: boolean
+        position_id:
+          type: string
+          format: uuid
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    ForgotPasswordRequest:
+      type: object
+      required:
+        - email
+      properties:
+        email:
+          type: string
+          format: email
+
+    ResetPasswordRequest:
+      type: object
+      required:
+        - token
+        - new_password
+      properties:
+        token:
+          type: string
+        new_password:
+          type: string
+          format: password
+          minLength: 8
+
+    AuthConfigResponse:
+      type: object
+      properties:
+        public_signup_enabled:
+          type: boolean
+        forgot_password_enabled:
+          type: boolean
+
+    PositionCreate:
+      type: object
+      required:
+        - name
+        - permissions
+      properties:
+        name:
+          type: string
+          example: Senior Agent
+        description:
+          type: string
+          example: Senior customer support agent
+        permissions:
+          type: array
+          items:
+            type: string
+          example: ["chat.view", "chat.assign", "chat.message"]
+
+    PositionUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        permissions:
+          type: array
+          items:
+            type: string
+
+    PositionResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        permissions:
+          type: array
+          items:
+            type: string
+        created_at:
+          type: string
+          format: date-time
+
+    ChatResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        platform:
+          type: string
+          enum: [instagram, facebook]
+        customer_name:
+          type: string
+        customer_id:
+          type: string
+        status:
+          type: string
+          enum: [open, closed, pending]
+        assigned_to:
+          type: string
+          format: uuid
+          nullable: true
+        last_message_at:
+          type: string
+          format: date-time
+        is_read:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+
+    ChatAssign:
+      type: object
+      required:
+        - assigned_to
+      properties:
+        assigned_to:
+          type: string
+          format: uuid
+
+    MessageCreate:
+      type: object
+      required:
+        - text
+      properties:
+        text:
+          type: string
+          example: Hello! How can I help you today?
+        message_type:
+          type: string
+          enum: [text, image, video, audio]
+          default: text
+
+    MessageResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        chat_id:
+          type: string
+          format: uuid
+        sender_type:
+          type: string
+          enum: [customer, agent, system]
+        text:
+          type: string
+        message_type:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    MessageTemplateCreate:
+      type: object
+      required:
+        - name
+        - content
+        - platform
+      properties:
+        name:
+          type: string
+          example: Welcome Message
+        content:
+          type: string
+          example: Welcome to our service! How can we help you today?
+        platform:
+          type: string
+          enum: [instagram, facebook]
+        category:
+          type: string
+          example: greeting
+        language:
+          type: string
+          default: en
+          example: en
+
+    MessageTemplateResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        content:
+          type: string
+        platform:
+          type: string
+        category:
+          type: string
+        language:
+          type: string
+        meta_status:
+          type: string
+          enum: [pending, approved, rejected]
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    InstagramAccountConnect:
+      type: object
+      required:
+        - instagram_business_account_id
+        - access_token
+        - page_id
+      properties:
+        instagram_business_account_id:
+          type: string
+        access_token:
+          type: string
+        page_id:
+          type: string
+
+    FacebookPageConnect:
+      type: object
+      required:
+        - page_id
+        - access_token
+        - page_name
+      properties:
+        page_id:
+          type: string
+        access_token:
+          type: string
+        page_name:
+          type: string
+
+    DashboardStats:
+      type: object
+      properties:
+        total_chats:
+          type: integer
+        open_chats:
+          type: integer
+        closed_chats:
+          type: integer
+        total_messages:
+          type: integer
+        active_agents:
+          type: integer
+        avg_response_time:
+          type: number
+          format: float
+
+    Error:
+      type: object
+      properties:
+        detail:
+          type: string
+          example: Error message description
+
+security:
+  - BearerAuth: []
+
+paths:
+  /api/auth/register:
+    post:
+      tags:
+        - Authentication
+      summary: Register a new user (Admin only)
+      description: Register a new user account. Requires admin authentication.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserRegister'
+      responses:
+        '201':
+          description: User successfully registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden - Admin access required
+
+  /api/auth/signup:
+    post:
+      tags:
+        - Authentication
+      summary: Public agent signup
+      description: Public agent signup endpoint (if enabled in configuration).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserRegister'
+      responses:
+        '201':
+          description: User successfully registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '400':
+          description: Invalid input or signup disabled
+        '409':
+          description: User already exists
+
+  /api/auth/config:
+    get:
+      tags:
+        - Authentication
+      summary: Get authentication configuration
+      description: Get authentication configuration including public signup and forgot password settings.
+      security: []
+      responses:
+        '200':
+          description: Configuration retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthConfigResponse'
+
+  /api/auth/forgot-password:
+    post:
+      tags:
+        - Authentication
+      summary: Request password reset
+      description: Request a password reset link to be sent to the user's email.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ForgotPasswordRequest'
+      responses:
+        '200':
+          description: Password reset email sent
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+        '404':
+          description: User not found
+
+  /api/auth/reset-password:
+    post:
+      tags:
+        - Authentication
+      summary: Reset password
+      description: Reset password using the token received via email.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResetPasswordRequest'
+      responses:
+        '200':
+          description: Password successfully reset
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+        '400':
+          description: Invalid or expired token
+
+  /api/auth/login:
+    post:
+      tags:
+        - Authentication
+      summary: User login
+      description: Login and receive JWT token for authentication.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserLogin'
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '401':
+          description: Invalid credentials
+
+  /api/auth/me:
+    get:
+      tags:
+        - Authentication
+      summary: Get current user
+      description: Get current authenticated user profile information.
+      responses:
+        '200':
+          description: User profile retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '401':
+          description: Unauthorized
+
+  /api/users:
+    get:
+      tags:
+        - User Management
+      summary: List all users
+      description: List all users in the system (admin only).
+      responses:
+        '200':
+          description: List of users
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/UserResponse'
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+
+  /api/users/agents:
+    get:
+      tags:
+        - User Management
+      summary: List assignable agents
+      description: List all assignable agents for chat assignment.
+      parameters:
+        - name: include_inactive
+          in: query
+          schema:
+            type: boolean
+            default: false
+          description: Include inactive agents in the list
+      responses:
+        '200':
+          description: List of agents
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/UserResponse'
+
+  /api/users/roster:
+    get:
+      tags:
+        - User Management
+      summary: Get user roster
+      description: Get user roster with assigned chat counts for each agent.
+      responses:
+        '200':
+          description: User roster with chat counts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    user:
+                      $ref: '#/components/schemas/UserResponse'
+                    assigned_chats:
+                      type: integer
+
+  /api/users/{user_id}/active:
+    patch:
+      tags:
+        - User Management
+      summary: Update user active state
+      description: Update user active/inactive state.
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - is_active
+              properties:
+                is_active:
+                  type: boolean
+      responses:
+        '200':
+          description: User updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '404':
+          description: User not found
+
+  /api/admin/users:
+    post:
+      tags:
+        - User Management
+      summary: Create user (Admin)
+      description: Create a new user (admin only).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserRegister'
+      responses:
+        '201':
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+
+  /api/positions:
+    get:
+      tags:
+        - Position Management
+      summary: List positions
+      description: List all positions (requires permission).
+      responses:
+        '200':
+          description: List of positions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PositionResponse'
+    post:
+      tags:
+        - Position Management
+      summary: Create position
+      description: Create a new position with specified permissions.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PositionCreate'
+      responses:
+        '201':
+          description: Position created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PositionResponse'
+
+  /api/positions/{position_id}:
+    put:
+      tags:
+        - Position Management
+      summary: Update position
+      description: Update an existing position.
+      parameters:
+        - name: position_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PositionUpdate'
+      responses:
+        '200':
+          description: Position updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PositionResponse'
+    delete:
+      tags:
+        - Position Management
+      summary: Delete position
+      description: Delete a position.
+      parameters:
+        - name: position_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Position deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  position_id:
+                    type: string
+
+  /api/permissions/codes:
+    get:
+      tags:
+        - Position Management
+      summary: Get permission codes
+      description: List all available permission codes and their definitions.
+      responses:
+        '200':
+          description: Permission codes
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties:
+                  type: string
+
+  /api/chats:
+    get:
+      tags:
+        - Chats
+      summary: List chats
+      description: List chats with various filters including status, platform, assignment, and read status.
+      parameters:
+        - name: status_filter
+          in: query
+          schema:
+            type: string
+            enum: [open, closed, pending]
+        - name: assigned_to_me
+          in: query
+          schema:
+            type: boolean
+        - name: platform
+          in: query
+          schema:
+            type: string
+            enum: [instagram, facebook]
+        - name: assigned_to
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: unseen
+          in: query
+          schema:
+            type: boolean
+        - name: not_replied
+          in: query
+          schema:
+            type: boolean
+      responses:
+        '200':
+          description: List of chats
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ChatResponse'
+
+  /api/chats/{chat_id}:
+    get:
+      tags:
+        - Chats
+      summary: Get chat details
+      description: Get chat details including all messages.
+      parameters:
+        - name: chat_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Chat details with messages
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  chat:
+                    $ref: '#/components/schemas/ChatResponse'
+                  messages:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/MessageResponse'
+
+  /api/chats/{chat_id}/assign:
+    post:
+      tags:
+        - Chats
+      summary: Assign chat
+      description: Assign a chat to an agent.
+      parameters:
+        - name: chat_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatAssign'
+      responses:
+        '200':
+          description: Chat assigned
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  chat:
+                    $ref: '#/components/schemas/ChatResponse'
+
+  /api/chats/{chat_id}/mark_read:
+    post:
+      tags:
+        - Chats
+      summary: Mark chat as read
+      description: Mark a chat as read by the current user.
+      parameters:
+        - name: chat_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Chat marked as read
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  chat_id:
+                    type: string
+
+  /api/chats/{chat_id}/message:
+    post:
+      tags:
+        - Chats
+      summary: Send message
+      description: Send a message in a chat.
+      parameters:
+        - name: chat_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MessageCreate'
+      responses:
+        '201':
+          description: Message sent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+
+  /api/templates:
+    get:
+      tags:
+        - Templates
+      summary: List templates
+      description: List all templates with optional filters by platform and category.
+      parameters:
+        - name: platform
+          in: query
+          schema:
+            type: string
+            enum: [instagram, facebook]
+        - name: category
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of templates
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/MessageTemplateResponse'
+    post:
+      tags:
+        - Templates
+      summary: Create template
+      description: Create a new message template (admin only).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MessageTemplateCreate'
+      responses:
+        '201':
+          description: Template created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageTemplateResponse'
+
+  /api/templates/{template_id}:
+    put:
+      tags:
+        - Templates
+      summary: Update template
+      description: Update an existing template (admin only).
+      parameters:
+        - name: template_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MessageTemplateCreate'
+      responses:
+        '200':
+          description: Template updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageTemplateResponse'
+    delete:
+      tags:
+        - Templates
+      summary: Delete template
+      description: Delete a template (admin only).
+      parameters:
+        - name: template_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Template deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+
+  /api/dashboard/stats:
+    get:
+      tags:
+        - Dashboard
+      summary: Get dashboard statistics
+      description: Get dashboard statistics including chat counts, message counts, and agent metrics.
+      responses:
+        '200':
+          description: Dashboard statistics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DashboardStats'
+
+  /api/instagram/comments:
+    get:
+      tags:
+        - Instagram
+      summary: List Instagram comments
+      description: List all Instagram comments for connected accounts.
+      responses:
+        '200':
+          description: List of comments
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+
+  /api/instagram/comments/{comment_id}/reply:
+    post:
+      tags:
+        - Instagram
+      summary: Reply to Instagram comment
+      description: Reply to an Instagram comment.
+      parameters:
+        - name: comment_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - text
+              properties:
+                text:
+                  type: string
+      responses:
+        '200':
+          description: Reply sent
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /api/facebook/pages:
+    get:
+      tags:
+        - Facebook
+      summary: List Facebook pages
+      description: List all connected Facebook pages.
+      responses:
+        '200':
+          description: List of pages
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+    post:
+      tags:
+        - Facebook
+      summary: Connect Facebook page
+      description: Connect a Facebook page (admin only).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FacebookPageConnect'
+      responses:
+        '201':
+          description: Page connected
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /api/webhooks/instagram:
+    get:
+      tags:
+        - Webhooks
+      summary: Instagram webhook verification
+      description: Verify Instagram webhook subscription.
+      security: []
+      parameters:
+        - name: hub.mode
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: hub.challenge
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: hub.verify_token
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Verification successful
+          content:
+            text/plain:
+              schema:
+                type: string
+    post:
+      tags:
+        - Webhooks
+      summary: Instagram webhook handler
+      description: Handle incoming Instagram webhook events.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Event processed
+
+  /api/webhooks/facebook:
+    get:
+      tags:
+        - Webhooks
+      summary: Facebook webhook verification
+      description: Verify Facebook webhook subscription.
+      security: []
+      parameters:
+        - name: hub.mode
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: hub.challenge
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: hub.verify_token
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Verification successful
+          content:
+            text/plain:
+              schema:
+                type: string
+    post:
+      tags:
+        - Webhooks
+      summary: Facebook webhook handler
+      description: Handle incoming Facebook webhook events.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Event processed
+
+  /webhook:
+    get:
+      tags:
+        - Webhooks
+      summary: Meta webhook verification
+      description: Meta webhook verification handler for Instagram DMs.
+      security: []
+      parameters:
+        - name: hub.mode
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: hub.challenge
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: hub.verify_token
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Verification successful
+    post:
+      tags:
+        - Webhooks
+      summary: Unified Meta webhook
+      description: Unified webhook entrypoint for Meta subscriptions.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Event processed

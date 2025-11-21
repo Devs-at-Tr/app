@@ -28,6 +28,7 @@ const CreateUserPage = ({ user, onLogout }) => {
   const [submitting, setSubmitting] = useState(false);
 
   const canManageTemplates = useMemo(() => hasPermission(user, 'template:manage'), [user]);
+  const canManageIntegrations = useMemo(() => hasPermission(user, 'integration:manage'), [user]);
   const canManagePositions = useMemo(() => hasPermission(user, 'position:manage'), [user]);
   const canViewUserRoster = useMemo(
     () => hasAnyPermission(user, ['position:assign', 'position:manage', 'chat:assign']),
@@ -47,9 +48,17 @@ const CreateUserPage = ({ user, onLogout }) => {
         canViewUserRoster,
         canManagePositions,
         canInviteUsers,
-        canViewStats
+        canViewStats,
+        canManageIntegrations
       }),
-    [canManageTemplates, canViewUserRoster, canManagePositions, canInviteUsers, canViewStats]
+    [
+      canManageTemplates,
+      canViewUserRoster,
+      canManagePositions,
+      canInviteUsers,
+      canViewStats,
+      canManageIntegrations
+    ]
   );
 
   const loadPositions = useCallback(async () => {

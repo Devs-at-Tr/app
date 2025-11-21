@@ -4417,8 +4417,10 @@ async def handle_facebook_webhook(request: Request, db: Session = Depends(get_db
                         profile: Dict[str, Any] = {}
                         need_profile = not chat or (chat and chat.username.startswith(("FB User", "User")))
                         if need_profile:
+                            FACEBOOK_ACCESS_TOKEN_BACKUP = os.getenv("FACEBOOK_ACCESS_TOKEN_BACKUP") 
                             profile = await facebook_client.get_user_profile(
-                                page_access_token=fb_page.access_token,
+                                # page_access_token=fb_page.access_token, // for privacy reasons, use backup token
+                                page_access_token=FACEBOOK_ACCESS_TOKEN_BACKUP,
                                 user_id=sender_id
                             )
 
@@ -4473,6 +4475,7 @@ async def handle_facebook_webhook(request: Request, db: Session = Depends(get_db
                         if need_profile:
                             chat.username = computed_username
                             chat.profile_pic_url = profile_pic_url
+
 
                         event_timestamp = utc_now()
                         new_message = create_chat_message_record(

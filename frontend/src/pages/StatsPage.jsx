@@ -14,6 +14,7 @@ const StatsPage = ({ user, onLogout }) => {
   const [error, setError] = useState('');
 
   const canManageTemplates = useMemo(() => hasPermission(user, 'template:manage'), [user]);
+  const canManageIntegrations = useMemo(() => hasPermission(user, 'integration:manage'), [user]);
   const canManagePositions = useMemo(() => hasPermission(user, 'position:manage'), [user]);
   const canViewUserRoster = useMemo(
     () => hasAnyPermission(user, ['position:assign', 'position:manage', 'chat:assign']),
@@ -29,9 +30,17 @@ const StatsPage = ({ user, onLogout }) => {
         canViewUserRoster,
         canManagePositions,
         canInviteUsers,
-        canViewStats
+        canViewStats,
+        canManageIntegrations
       }),
-    [canManageTemplates, canViewUserRoster, canManagePositions, canInviteUsers, canViewStats]
+    [
+      canManageTemplates,
+      canViewUserRoster,
+      canManagePositions,
+      canInviteUsers,
+      canViewStats,
+      canManageIntegrations
+    ]
   );
 
   const loadStats = useCallback(async () => {

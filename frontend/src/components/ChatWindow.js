@@ -19,10 +19,10 @@ import {
   DialogTitle,
 } from './ui/dialog';
 import { Badge } from './ui/badge';
-import { Send, UserPlus, Instagram, FileText, CheckCircle, Search, X } from 'lucide-react';
+import { Send, UserPlus, Instagram, FileText, CheckCircle, Search, X, ChevronLeft, Info } from 'lucide-react';
 import axios from 'axios';
 import { API, BACKEND_URL } from '../App';
-import { useIsMobile } from '../hooks/useMediaQuery';
+import { useIsMobile, useIsTablet } from '../hooks/useMediaQuery';
 import './ChatWindow.css';
 
 const HUMAN_AGENT_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -45,9 +45,10 @@ const FacebookIcon = ({ className }) => (
   </svg>
 );
 
-const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false }) => {
+const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, onBackToList }) => {
   const { selectedChat: chat, sendMessage } = useChatContext();
   const isMobile = useIsMobile(); // Must be at top level before any conditional logic
+  const isTablet = useIsTablet();
   const [message, setMessage] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [showTemplateDialog, setShowTemplateDialog] = useState(false);
@@ -339,17 +340,10 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false }) 
     setIsProfileOpen(false);
   }, []);
 
-  if (!chat) {
-    return (
-      <div className="conversation-panel h-full w-full flex items-center justify-center" data-testid="no-chat-selected">
-        <div className="text-center space-y-2">
-          <MessageSquareIcon className="w-16 h-16 text-gray-600 mx-auto" />
-          <p className="text-[var(--tg-text-secondary)] text-lg">Select a chat to start messaging</p>
-        </div>
-      </div>
-    );
+  const showMobileBackButton = Boolean(onBackToList) && isMobile;
+
   const AttachmentPreview = ({ url }) => {
-    const [mode, setMode] = useState('video'); // 'video' → 'image' → 'link'
+    const [mode, setMode] = useState('video'); // 'video' -> 'image' -> 'link'
 
     if (mode === 'video') {
       return (
@@ -387,81 +381,104 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false }) 
       </a>
     );
   };
+
+  if (!chat) {
+    return (
+      <div className="conversation-panel h-full w-full flex items-center justify-center" data-testid="no-chat-selected">
+        <div className="text-center space-y-2">
+          <MessageSquareIcon className="w-16 h-16 text-gray-600 mx-auto" />
+          <p className="text-[var(--tg-text-secondary)] text-lg">Select a chat to start messaging</p>
+        </div>
+      </div>
+    );
+  }
   return (
     <div
-      className={`flex h-full min-h-0 relative w-full ${isMobile ? 'flex-col space-y-4' : ''}`}
+      className={cn(
+        'flex h-full min-h-0 w-full gap-3 overflow-hidden',
+        isMobile ? 'flex-col' : 'items-stretch'
+      )}
       data-testid="chat-window"
     >
-      <div className="conversation-panel flex-1 relative w-full">
+      <div className="conversation-panel flex-1 relative w-full min-w-0 flex flex-col">
         {/* Chat Header */}
         <div className="conversation-header">
           <div className="flex items-center gap-3 flex-1 min-w-0">
-            {chatAvatarUrl ? (
-              <img
-                src={chatAvatarUrl}
-                alt={chatDisplayName}
-                className="w-12 h-12 rounded-full object-cover border border-gray-700"
-              />
-            ) : (
-              <div
-                className={`w-12 h-12 rounded-full flex items-center justify-center ${
-                  chat.platform === 'FACEBOOK'
-                    ? 'bg-gradient-to-br from-blue-600 to-blue-700'
-                    : 'bg-gradient-to-br from-purple-600 to-pink-600'
-                }`}
+            {showMobileBackButton && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="px-2 text-[var(--tg-text-primary)] hover:text-[var(--tg-accent-strong)] rounded-full bg-[var(--tg-surface-muted)]/60"
+                onClick={onBackToList}
               >
-                {chat.platform === 'FACEBOOK' ? (
-                  <FacebookIcon className="w-5 h-5 text-white" />
-                ) : (
-                  <Instagram className="w-5 h-5 text-white" />
-                )}
-              </div>
+                <ChevronLeft className="w-4 h-4 mr-1" />
+                <span className="text-sm font-medium">Back</span>
+              </Button>
             )}
-            <div className="space-y-1 min-w-0">
-              <div className="flex items-center gap-2 flex-wrap">
-                <button
-                  type="button"
-                  onClick={handleProfileToggle}
-                  className="text-lg font-semibold text-white hover:text-[var(--tg-accent-strong)] transition-colors"
-                  data-testid="chat-username"
-                  title="View profile info"
+            <div className="flex items-center gap-3 min-w-0 flex-1">
+              {chatAvatarUrl ? (
+                <img
+                  src={chatAvatarUrl}
+                  alt={chatDisplayName}
+                  className="w-10 h-10 rounded-full object-cover border border-gray-700"
+                />
+              ) : (
+                <div
+                  className={`w-10 h-10 rounded-full flex items-center justify-center ${
+                    chat.platform === 'FACEBOOK'
+                      ? 'bg-gradient-to-br from-blue-600 to-blue-700'
+                      : 'bg-gradient-to-br from-purple-600 to-pink-600'
+                  }`}
                 >
-                  {chatDisplayName}
-                </button>
-                <span className="assignment-pill inline-flex items-center gap-1">
                   {chat.platform === 'FACEBOOK' ? (
-                    <FacebookIcon className="w-3.5 h-3.5" />
+                    <FacebookIcon className="w-4 h-4 text-white" />
                   ) : (
-                    <Instagram className="w-3.5 h-3.5" />
+                    <Instagram className="w-4 h-4 text-white" />
                   )}
-                  {chat.platform === 'FACEBOOK' ? 'Messenger' : 'Instagram'}
-                </span>
-                {chat.status && (
-                  <span className="assignment-pill">
-                    {chat.status.replace('_', ' ')}
+                </div>
+              )}
+              <div className="flex flex-col gap-1 min-w-0">
+                <div className="flex flex-wrap items-center gap-2 min-w-0">
+                  <button
+                    type="button"
+                    onClick={handleProfileToggle}
+                    className="text-sm sm:text-base font-semibold text-white hover:text-[var(--tg-accent-strong)] transition-colors truncate max-w-[200px] sm:max-w-[260px]"
+                    data-testid="chat-username"
+                    title="View profile info"
+                  >
+                    {chatDisplayName}
+                  </button>
+                  <span className="assignment-pill assignment-pill--compact inline-flex items-center gap-1">
+                    {chat.platform === 'FACEBOOK' ? (
+                      <FacebookIcon className="w-3.5 h-3.5" />
+                    ) : (
+                      <Instagram className="w-3.5 h-3.5" />
+                    )}
+                    {chat.platform === 'FACEBOOK' ? 'Messenger' : 'Instagram'}
                   </span>
-                )}
-              </div>
-              <div className="flex flex-wrap items-center gap-3 text-xs text-[var(--tg-text-muted)]">
-                <span data-testid="chat-instagram-id">@{chatHandle || 'unknown'}</span>
-                {lastActivityLabel && <span>Last activity · {lastActivityLabel}</span>}
+                </div>
+                <div className="flex flex-wrap items-center gap-2 text-[11px] text-[var(--tg-text-muted)] min-w-0">
+                  <span className="truncate">@{chatHandle || 'unknown'}</span>
+                  {lastActivityLabel && (
+                    <span className="hidden sm:inline-flex items-center gap-1 text-[var(--tg-text-muted)]">
+                      <span className="inline-block w-1 h-1 rounded-full bg-[var(--tg-border-soft)]" />
+                      <span className="truncate">{lastActivityLabel}</span>
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
           </div>
 
-          <div className="flex items-center gap-2 flex-wrap justify-end">
-            <span
-              className={`assignment-pill ${assignedAgentName ? '' : 'assignment-pill--unassigned'}`}
-            >
-              {assignedAgentName ? `Assigned to ${assignedAgentName}` : 'Unassigned'}
-            </span>
-            {canAssignChats && (
+          <div className="flex items-center gap-2 flex-wrap justify-end w-full md:w-auto md:flex-none">
+            {canAssignChats ? (
               <Select
                 value={chat.assigned_to || 'unassigned'}
                 onValueChange={(value) => onAssignChat(chat.id, value === 'unassigned' ? null : value)}
               >
                 <SelectTrigger
-                  className="w-full sm:w-[220px] bg-transparent border-gray-700 text-white rounded-full"
+                  className="h-9 w-[170px] md:w-[190px] border-[var(--tg-border-soft)] bg-[var(--tg-surface)] text-white rounded-full px-3 text-sm"
                   data-testid="assign-agent-select"
                 >
                   <UserPlus className="w-4 h-4 mr-2" />
@@ -469,7 +486,7 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false }) 
                 </SelectTrigger>
                 <SelectContent className="bg-[#1a1a2e] border-gray-700">
                   <SelectItem value="unassigned" className="text-white">
-                    Unassign
+                    Unassigned
                   </SelectItem>
                   {agents.map((agent) => (
                     <SelectItem key={agent.id} value={agent.id} className="text-white">
@@ -478,15 +495,31 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false }) 
                   ))}
                 </SelectContent>
               </Select>
+            ) : (
+              <span
+                className={cn(
+                  'assignment-pill assignment-pill--compact text-xs px-3 py-1.5 rounded-full truncate max-w-[220px]',
+                  assignedAgentName ? '' : 'assignment-pill--unassigned'
+                )}
+                data-testid="assigned-agent-readonly"
+              >
+                {assignedAgentName ? `Assigned to ${assignedAgentName}` : 'Unassigned'}
+              </span>
             )}
-            <Button variant="ghost" size="sm" onClick={handleProfileToggle}>
-              {isProfileOpen ? 'Hide details' : 'View details'}
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-9 px-2.5 rounded-full border border-[var(--tg-border-soft)] bg-[var(--tg-surface-muted)]/70 flex items-center gap-1.5 text-[var(--tg-text-primary)] hover:text-[var(--tg-accent-strong)]"
+              aria-label="Conversation details"
+              onClick={handleProfileToggle}
+            >
+              <Info className="w-4 h-4" />
+              <span className="text-sm hidden sm:inline">{isProfileOpen ? 'Hide details' : 'Details'}</span>
             </Button>
           </div>
         </div>
-
         {/* Messages */}
-        <div className="conversation-body space-y-4 chat-scroll" data-testid="messages-container">
+        <div className="conversation-body space-y-1.5 chat-scroll" data-testid="messages-container">
           {orderedMessages.length === 0 ? (
             <div className="text-center text-gray-500 mt-8">No messages yet</div>
           ) : (
@@ -508,7 +541,7 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false }) 
                 const sentByName = msg.sent_by?.name || msg.sent_by?.email;
                 let originLabel = '';
                 if (showAsTicklegram) {
-                  originLabel = `Sent from Ticklegram${sentByName ? ` · ${sentByName}` : ''}`;
+                  originLabel = `Sent from Ticklegram${sentByName ? ` - ${sentByName}` : ''}`;
                 } else if (isInstagramPage) {
                   originLabel = 'Sent from Instagram app';
                 } else if (sentByName) {
@@ -553,7 +586,7 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false }) 
                       data-testid={`message-${msg.id}`}
                     >
                       <div
-                        className={`max-w-[70%] rounded-2xl px-4 py-3 ${bubbleClasses}`}
+                        className={`max-w-[76%] rounded-2xl px-3 py-2.5 ${bubbleClasses}`}
                       >
                         {displayText && (
                           <p className="text-sm whitespace-pre-line break-words">{displayText}</p>
@@ -601,11 +634,11 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false }) 
               The 24-hour human agent window has expired. Send an approved template or wait for the user to reply.
             </div>
           )}
-          <form onSubmit={handleSend} className="space-y-3">
+          <form onSubmit={handleSend} className="space-y-1">
             <Textarea
               value={message}
               onChange={(e) => setMessage(e.target.value)}
-              className={`composer-textarea ${isMobile ? 'min-h-[80px]' : 'min-h-[100px]'}`}
+              className={`composer-textarea ${isMobile ? 'min-h-[40px]' : 'min-h-[44px]'} text-sm resize-none`}
               data-testid="message-input"
               disabled={!canSendManualMessage}
               aria-disabled={!canSendManualMessage}
@@ -614,25 +647,32 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false }) 
                   ? 'Type a reply, use / for shortcuts...'
                   : '24-hour window expired. Use an approved template.'
               }
+              rows={1}
+              style={{ overflow: 'hidden' }}
+              onInput={(e) => {
+                const target = e.target;
+                target.style.height = 'auto';
+                target.style.height = `${Math.min(target.scrollHeight, 180)}px`;
+              }}
             />
-            <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center justify-between gap-1.5">
               <div className="composer-toolbar">
                 <Button
                   type="button"
                   onClick={() => setShowTemplateDialog(true)}
                   variant="ghost"
-                  className={isMobile ? 'min-w-[44px] min-h-[44px]' : ''}
+                  className={isMobile ? 'min-w-[36px] min-h-[36px]' : 'h-9 px-3'}
                   title="Templates (Ctrl+T)"
                 >
                   <FileText className="w-4 h-4" />
-                  <span className="hidden sm:inline">Templates</span>
+                  <span className="hidden sm:inline text-sm">Templates</span>
                 </Button>
               </div>
               <Button
                 type="submit"
                 disabled={!message.trim() || isSending || !canSendManualMessage}
-                className={`rounded-full px-6 py-2 bg-gradient-to-r from-indigo-500 to-blue-500 hover:from-indigo-600 hover:to-blue-600 ${
-                  isMobile ? 'min-h-[44px]' : ''
+                className={`rounded-full px-4 h-9 bg-gradient-to-r from-indigo-500 to-blue-500 hover:from-indigo-600 hover:to-blue-600 ${
+                  isMobile ? 'min-h-[36px]' : ''
                 }`}
                 data-testid="send-message-button"
               >
@@ -775,9 +815,30 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false }) 
           </DialogContent>
         </Dialog>
       </div>
-
-      {!isMobile && isProfileOpen && (
-        <div className="chat-profile-overlay">
+      {(isMobile || isTablet) && isProfileOpen && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm">
+          <div className="absolute inset-0" onClick={handleCloseProfile} role="presentation" />
+          <div className="absolute inset-x-3 bottom-3 top-12 overflow-y-auto">
+            <ChatProfilePanel
+              chat={chat}
+              onClose={handleCloseProfile}
+              isMobile
+              canSendManualMessage={canSendManualMessage}
+              chatDisplayName={chatDisplayName}
+              chatHandle={chatHandle}
+              chatAvatarUrl={chatAvatarUrl}
+              lastActivityLabel={lastActivityLabel}
+            />
+          </div>
+        </div>
+      )}
+      {!isMobile && !isTablet && (
+        <aside
+          className={cn(
+            'flex-col h-full min-w-[280px] max-w-[340px] flex-shrink-0 transition-all duration-150',
+            isProfileOpen ? 'hidden lg:flex opacity-100 translate-x-0' : 'hidden lg:hidden'
+          )}
+        >
           <ChatProfilePanel
             chat={chat}
             onClose={handleCloseProfile}
@@ -786,21 +847,9 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false }) 
             chatDisplayName={chatDisplayName}
             chatHandle={chatHandle}
             chatAvatarUrl={chatAvatarUrl}
+            lastActivityLabel={lastActivityLabel}
           />
-        </div>
-      )}
-      {isMobile && isProfileOpen && (
-        <div className="mt-4">
-          <ChatProfilePanel
-            chat={chat}
-            onClose={handleCloseProfile}
-            isMobile
-            canSendManualMessage={canSendManualMessage}
-            chatDisplayName={chatDisplayName}
-            chatHandle={chatHandle}
-            chatAvatarUrl={chatAvatarUrl}
-          />
-        </div>
+        </aside>
       )}
     </div>
   );
@@ -814,6 +863,7 @@ const ChatProfilePanel = ({
   chatDisplayName,
   chatHandle,
   chatAvatarUrl,
+  lastActivityLabel,
 }) => {
   const assignedAgent = chat.assigned_agent;
   const messageCount = chat.messages?.length ?? 0;
@@ -843,6 +893,22 @@ const ChatProfilePanel = ({
   const initials = displayName?.charAt(0)?.toUpperCase() || '?';
 
   const infoItems = [
+    {
+      label: 'Handle',
+      value: `@${handle || 'unknown'}`,
+    },
+    {
+      label: 'Assigned Agent',
+      value: assignedAgent?.name || 'Unassigned',
+    },
+    {
+      label: 'Status',
+      value: statusLabel,
+    },
+    {
+      label: 'Last Activity',
+      value: lastActivityLabel || 'Not available',
+    },
     {
       label: 'Chat Created',
       value: chat.created_at ? formatMessageDate(chat.created_at) : 'Not available',
@@ -889,11 +955,11 @@ const ChatProfilePanel = ({
     <aside
       className={cn(
         'chat-panel bg-[var(--tg-surface)] border border-[var(--tg-border-soft)] flex flex-col min-h-0',
-        isMobile ? 'rounded-2xl' : 'h-full'
+        isMobile ? 'rounded-2xl' : 'h-full overflow-hidden'
       )}
     >
-      <div className="p-5 border-b border-[var(--tg-border-soft)] flex items-start justify-between">
-        <div className="flex items-center gap-3">
+      <div className="p-2 border-b border-[var(--tg-border-soft)] flex items-start justify-between">
+        <div className="flex items-center gap-2">
           {avatarUrl ? (
             <img
               src={avatarUrl}
@@ -905,10 +971,10 @@ const ChatProfilePanel = ({
               {initials}
             </div>
           )}
-          <div>
-            <p className="text-xs uppercase text-[var(--tg-text-muted)] tracking-wide">Profile</p>
-            <p className="text-lg font-semibold text-[var(--tg-text-primary)]">{displayName}</p>
-            <p className="text-xs text-[var(--tg-text-muted)]">@{handle || 'unknown'}</p>
+          <div className="min-w-0">
+            <p className="text-[10px] uppercase text-[var(--tg-text-muted)] tracking-wide">Profile</p>
+            <p className="text-base font-semibold text-[var(--tg-text-primary)] truncate">{displayName}</p>
+            <p className="text-xs text-[var(--tg-text-muted)] truncate">@{handle || 'unknown'}</p>
             <div className="flex flex-wrap gap-2 mt-2">
               <Badge className={statusBadgeClass}>{statusLabel}</Badge>
               <Badge variant="outline" className="border-[var(--tg-border-soft)] text-[var(--tg-text-secondary)]">
@@ -920,32 +986,32 @@ const ChatProfilePanel = ({
         <button
           type="button"
           onClick={onClose}
-          className="text-[var(--tg-text-muted)] hover:text-[var(--tg-text-primary)] transition-colors"
+          className="text-[var(--tg-text-muted)] hover:text-[var(--tg-text-primary)] transition-colors h-8 w-8 flex items-center justify-center rounded-full border border-transparent hover:border-[var(--tg-border-soft)]"
           aria-label="Close profile panel"
         >
           <X className="w-4 h-4" />
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4 space-y-6 chat-scroll">
-        <div className="space-y-2">
-          <p className="text-xs uppercase text-[var(--tg-text-muted)] tracking-wide">Assigned Agent</p>
-          {assignedAgent ? (
-            <>
-              <p className="text-sm font-medium text-[var(--tg-text-primary)]">{assignedAgent.name}</p>
-              <p className="text-xs text-[var(--tg-text-muted)]">{assignedAgent.email}</p>
-            </>
-          ) : (
-            <p className="text-sm text-[var(--tg-text-muted)]">Unassigned</p>
-          )}
+      <div className="flex-1 overflow-y-auto p-3 space-y-2.5 chat-scroll">
+        <div className="space-y-1.5">
+          <p className="text-xs uppercase text-[var(--tg-text-muted)] tracking-wide">Conversation Info</p>
+          <div className="grid grid-cols-2 gap-x-3 gap-y-2">
+            {infoItems.map((item) => (
+              <div key={item.label} className="flex flex-col gap-0.5">
+                <span className="text-[10px] uppercase tracking-wide text-[var(--tg-text-muted)]">{item.label}</span>
+                <span className="text-sm text-[var(--tg-text-primary)] break-all">{item.value}</span>
+              </div>
+            ))}
+          </div>
         </div>
 
-        <div className="space-y-2">
+        <div className="space-y-1.5">
           <p className="text-xs uppercase text-[var(--tg-text-muted)] tracking-wide">Last Message</p>
           {lastMessage ? (
-            <div className="bg-[var(--tg-surface-muted)] border border-[var(--tg-border-soft)] rounded-lg p-3">
+            <div className="bg-[var(--tg-surface-muted)] border border-[var(--tg-border-soft)] rounded-lg p-2.5">
               <p className="text-sm text-[var(--tg-text-primary)] whitespace-pre-wrap">{lastMessage.content}</p>
-              <p className="text-xs text-[var(--tg-text-muted)] mt-2">
+              <p className="text-xs text-[var(--tg-text-muted)] mt-1.5">
                 {lastMessage.timestamp ? formatMessageDate(lastMessage.timestamp) : ''}
               </p>
             </div>
@@ -954,14 +1020,6 @@ const ChatProfilePanel = ({
           )}
         </div>
 
-        <div className="space-y-4">
-          {infoItems.map((item) => (
-            <div key={item.label} className="flex flex-col">
-              <span className="text-xs uppercase text-[var(--tg-text-muted)] tracking-wide">{item.label}</span>
-              <span className="text-sm text-[var(--tg-text-primary)] break-all">{item.value}</span>
-            </div>
-          ))}
-        </div>
       </div>
     </aside>
   );
@@ -974,3 +1032,6 @@ const MessageSquareIcon = ({ className }) => (
 );
 
 export default ChatWindow;
+
+
+

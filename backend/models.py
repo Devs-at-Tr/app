@@ -247,6 +247,7 @@ class FacebookMessage(ChatMessageMixin, Base):
 
     chat = relationship("Chat", back_populates="facebook_chat_messages")
     facebook_user = relationship("FacebookUser", back_populates="messages")
+    # raw_payload_json = Column(Text, nullable=True)
 
 class FacebookPage(Base):
     __tablename__ = "facebook_pages"

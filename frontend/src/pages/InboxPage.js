@@ -12,10 +12,9 @@ import ChatWindow from '../components/ChatWindow';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Sheet, SheetContent } from '../components/ui/sheet';
-import { Settings, Instagram, Search, EyeOff, CornerDownLeft } from 'lucide-react';
+import { Search, SlidersHorizontal, X, Filter, RefreshCw, Users } from 'lucide-react';
 import { useIsMobile } from '../hooks/useMediaQuery';
-import FacebookPageManager from '../components/FacebookPageManager';
-import InstagramAccountManager from '../components/InstagramAccountManager';
+import { Switch } from '../components/ui/switch';
 import { hasPermission, hasAnyPermission } from '../utils/permissionUtils';
 import { buildNavigationItems } from '../utils/navigationConfig';
 import { cn } from '../lib/utils';
@@ -50,9 +49,6 @@ const InboxContent = ({ user, onLogout }) => {
   const [stats, setStats] = useState(null);
   const [agents, setAgents] = useState([]);
   const [selectedPlatform, setSelectedPlatform] = useState('all');
-  const [showFacebookManager, setShowFacebookManager] = useState(false);
-  const [showInstagramManager, setShowInstagramManager] = useState(false);
-  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [chatSearchQuery, setChatSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -61,6 +57,9 @@ const InboxContent = ({ user, onLogout }) => {
     notReplied: false,
     assignedTo: 'all'
   });
+  const [mobileView, setMobileView] = useState('list');
+  const [filterSheetOpen, setFilterSheetOpen] = useState(false);
+  const [filtersExpanded, setFiltersExpanded] = useState(false);
 
   const canManageIntegrations = useMemo(() => hasPermission(user, 'integration:manage'), [user]);
   const canManageTemplates = useMemo(() => hasPermission(user, 'template:manage'), [user]);
@@ -88,9 +87,10 @@ const InboxContent = ({ user, onLogout }) => {
         canViewUserRoster,
         canManagePositions,
         canInviteUsers,
-        canViewStats
+        canViewStats,
+        canManageIntegrations
       }),
-    [canManageTemplates, canViewUserRoster, canManagePositions, canInviteUsers, canViewStats]
+    [canManageTemplates, canViewUserRoster, canManagePositions, canInviteUsers, canViewStats, canManageIntegrations]
   );
 
   const buildChatFilterParams = useCallback(() => {
@@ -142,6 +142,14 @@ const InboxContent = ({ user, onLogout }) => {
     }));
   }, []);
 
+  const handleClearFilters = useCallback(() => {
+    setChatFilters({
+      unseen: false,
+      notReplied: false,
+      assignedTo: 'all'
+    });
+  }, []);
+
   const loadData = useCallback(
     async (platform) => {
       setLoading(true);
@@ -183,6 +191,16 @@ const InboxContent = ({ user, onLogout }) => {
     loadData(resolvedPlatform);
   }, [resolvedPlatform, loadData]);
 
+  useEffect(() => {
+    if (!isMobile) {
+      setMobileView('list');
+      return;
+    }
+    if (!selectedChat) {
+      setMobileView('list');
+    }
+  }, [isMobile, selectedChat]);
+
   const handlePlatformChange = useCallback(
     (platform) => {
       if (platform === 'whatsapp') {
@@ -200,7 +218,7 @@ const InboxContent = ({ user, onLogout }) => {
     try {
       await selectChat(chatId);
       if (isMobile) {
-        setMobileSidebarOpen(false);
+        setMobileView('thread');
       }
     } catch (err) {
       console.error('Error selecting chat:', err);
@@ -233,7 +251,7 @@ const InboxContent = ({ user, onLogout }) => {
   };
 
   const renderFilterChips = () => (
-    <div className="flex flex-wrap gap-2">
+    <div className="flex flex-wrap items-center gap-2">
       {messageFilters.map((filter) => {
         const isSelected = selectedPlatform === filter.id;
         return (
@@ -256,125 +274,140 @@ const InboxContent = ({ user, onLogout }) => {
           </button>
         );
       })}
+      {isMobile && (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => setFilterSheetOpen(true)}
+          className="rounded-full border-[var(--tg-border-soft)] bg-[var(--tg-surface)] text-[var(--tg-text-primary)] gap-2"
+        >
+          <SlidersHorizontal className="w-4 h-4" />
+          Filters
+        </Button>
+      )}
     </div>
   );
 
+  const renderToggleChip = (key, label) => (
+    <label className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full border border-[var(--tg-border-soft)] bg-[var(--tg-surface-muted)] text-[12px] sm:text-[13px] font-medium text-[var(--tg-text-secondary)]">
+      <span>{label}</span>
+      <Switch
+        checked={chatFilters[key]}
+        onCheckedChange={() => handleFilterToggle(key)}
+      />
+    </label>
+  );
+
+  const renderAgentSelect = () =>
+    canViewAllChats ? (
+      <div className="flex items-center gap-2">
+        <Users className="w-4 h-4 text-[var(--tg-text-muted)]" />
+        <Select value={chatFilters.assignedTo} onValueChange={handleAssignedFilterChange}>
+          <SelectTrigger className="min-w-[150px] sm:min-w-[180px] h-9 bg-[var(--tg-surface)] border-[var(--tg-border-soft)] text-sm rounded-full px-3">
+            <SelectValue placeholder="All agents" />
+          </SelectTrigger>
+          <SelectContent className="bg-[var(--tg-surface)] text-[var(--tg-text-primary)]">
+            <SelectItem value="all">All agents</SelectItem>
+            <SelectItem value="unassigned">Unassigned</SelectItem>
+            {agents.map((agent) => (
+              <SelectItem key={agent.id} value={agent.id} disabled={!agent.is_active}>
+                {agent.name} {agent.is_active ? '' : '(inactive)'}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+    ) : null;
+
   const renderFilters = () => (
-    <div className="space-y-4">
-      {renderFilterChips()}
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="relative flex-1 min-w-[220px] sm:max-w-sm lg:max-w-lg">
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex-1 min-w-0 overflow-hidden">
+          <div className="flex items-center gap-1 overflow-x-auto no-scrollbar py-1">
+            {renderFilterChips()}
+          </div>
+        </div>
+        <div className="flex items-center gap-1 flex-shrink-0">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="h-9 w-9 rounded-full border border-[var(--tg-border-soft)] bg-[var(--tg-surface)] hover:bg-[var(--tg-surface-muted)]"
+            onClick={() => setFiltersExpanded((prev) => !prev)}
+            aria-label="Toggle filters"
+          >
+            <Filter className="w-4 h-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-9 w-9 rounded-full border border-[var(--tg-border-soft)] bg-[var(--tg-surface)] hover:bg-[var(--tg-surface-muted)]"
+            onClick={() => loadData(selectedPlatform)}
+            aria-label="Refresh chats"
+          >
+            <RefreshCw className="w-4 h-4" />
+          </Button>
+        </div>
+      </div>
+
+      <div className="flex items-center gap-2">
+        <div className="relative flex-1 min-w-[200px]">
           <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[var(--tg-text-muted)]" />
           <Input
             value={chatSearchQuery}
             onChange={(event) => setChatSearchQuery(event.target.value)}
-            placeholder="Search conversations, people, or labels"
-            className="pl-9 inbox-search-input inbox-search-input--compact w-full"
+            placeholder="Search conversations..."
+            className="pl-9 inbox-search-input inbox-search-input--compact w-full h-10 text-sm"
           />
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {isMobile && (
-            <Button
-              variant="ghost"
-              className="inbox-action-btn"
-              onClick={() => setMobileSidebarOpen(true)}
-            >
-              Open chats
-            </Button>
-          )}
-          <Button
-            variant="outline"
-            className="inbox-action-btn"
-            onClick={() => loadData(selectedPlatform)}
-          >
-            Refresh
-          </Button>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            type="button"
-            variant={chatFilters.unseen ? 'default' : 'ghost'}
-            className="inbox-action-btn"
-            onClick={() => handleFilterToggle('unseen')}
-          >
-            <EyeOff className="w-4 h-4 mr-2" />
-            Unseen
-          </Button>
-          <Button
-            type="button"
-            variant={chatFilters.notReplied ? 'default' : 'ghost'}
-            className="inbox-action-btn"
-            onClick={() => handleFilterToggle('notReplied')}
-          >
-            <CornerDownLeft className="w-4 h-4 mr-2 rotate-180" />
-            Needs reply
-          </Button>
-          {canViewAllChats && (
-            <Select value={chatFilters.assignedTo} onValueChange={handleAssignedFilterChange}>
-              <SelectTrigger className="min-w-[200px] bg-[var(--tg-surface)] border-[var(--tg-border-soft)] text-sm">
-                <SelectValue placeholder="Filter by agent" />
-              </SelectTrigger>
-              <SelectContent className="bg-[var(--tg-surface)] text-[var(--tg-text-primary)]">
-                <SelectItem value="all">All agents</SelectItem>
-                <SelectItem value="unassigned">Unassigned</SelectItem>
-                {agents.map((agent) => (
-                  <SelectItem key={agent.id} value={agent.id} disabled={!agent.is_active}>
-                    {agent.name} {agent.is_active ? '' : '(inactive)'}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
-        </div>
       </div>
+
+      {filtersExpanded && (
+        <div className="flex flex-wrap items-center gap-2">
+          {renderToggleChip('unseen', 'Unseen')}
+          {renderToggleChip('notReplied', 'Needs reply')}
+          {renderAgentSelect()}
+        </div>
+      )}
     </div>
   );
 
   const showError = error || chatsError;
 
-  const workspace = isMobile ? (
+  const mobileWorkspace = (
     <div className="flex-1 min-h-0 flex flex-col gap-4">
-      <Sheet open={mobileSidebarOpen} onOpenChange={setMobileSidebarOpen}>
-        <SheetContent
-          side="left"
-          className="p-0 w-[88vw] sm:w-[420px] bg-[var(--tg-surface)] border-[var(--tg-border-soft)]"
-        >
-          <div className="h-full flex flex-col">
-            <div className="px-4 py-3 border-b border-[var(--tg-border-soft)] flex items-center justify-between">
-              <p className="text-base font-semibold">Inbox</p>
-              <Button size="sm" variant="ghost" onClick={() => setMobileSidebarOpen(false)}>
-                Close
-              </Button>
-            </div>
-            <div className="flex-1 overflow-hidden">
-              <ChatSidebar
-                chats={chats}
-                selectedChatId={selectedChat?.id}
-          onSelectChat={(chatId) => {
-            handleSelectChat(chatId);
-            setMobileSidebarOpen(false);
-          }}
-          selectedPlatform={selectedPlatform}
-          loading={chatsLoading}
-          hideHeader
-          searchQuery={chatSearchQuery}
-          onSearchQueryChange={setChatSearchQuery}
-              />
-            </div>
-          </div>
-        </SheetContent>
-      </Sheet>
-      <div className="flex-1 min-h-0 rounded-2xl border border-[var(--tg-border-soft)] bg-[var(--tg-surface)]">
-        <ChatWindow
-          chat={selectedChat}
-          onSendMessage={handleSendMessage}
-          onAssignChat={handleAssignChat}
-          agents={agents}
-          userRole={user.role}
-          canAssignChats={canAssignChats}
-        />
-      </div>
+      {mobileView === 'list' ? (
+        <div className="rounded-2xl border border-[var(--tg-border-soft)] bg-[var(--tg-surface)] flex-1">
+          <ChatSidebar
+            chats={chats}
+            selectedChatId={selectedChat?.id}
+            onSelectChat={handleSelectChat}
+            selectedPlatform={selectedPlatform}
+            loading={chatsLoading}
+            hideHeader={false}
+            searchQuery={chatSearchQuery}
+            onSearchQueryChange={setChatSearchQuery}
+          />
+        </div>
+      ) : (
+        <div className="rounded-2xl border border-[var(--tg-border-soft)] bg-[var(--tg-surface)] flex-1">
+          <ChatWindow
+            chat={selectedChat}
+            onSendMessage={handleSendMessage}
+            onAssignChat={handleAssignChat}
+            agents={agents}
+            userRole={user.role}
+            canAssignChats={canAssignChats}
+            onBackToList={() => setMobileView('list')}
+          />
+        </div>
+      )}
     </div>
+  );
+
+  const workspace = isMobile ? (
+    mobileWorkspace
   ) : (
     <InboxWorkspace
       className="flex-1 min-h-0"
@@ -391,7 +424,7 @@ const InboxContent = ({ user, onLogout }) => {
         />
       }
       conversationColumn={
-        <div className="rounded-3xl border border-[var(--tg-border-soft)] bg-[var(--tg-surface)] h-full flex flex-1">
+        <div className="rounded-2xl border border-[var(--tg-border-soft)] bg-[var(--tg-surface)] h-full flex flex-1 overflow-hidden">
           <ChatWindow
             chat={selectedChat}
             onSendMessage={handleSendMessage}
@@ -405,49 +438,12 @@ const InboxContent = ({ user, onLogout }) => {
     />
   );
 
-  const sidebarExtras = useMemo(() => {
-    if (!canManageIntegrations) {
-      return null;
-    }
-    return (expanded) => (
-      <div className="space-y-3">
-        <div className="rounded-xl border border-[var(--tg-border-soft)] bg-[var(--tg-surface-muted)] px-3 py-2 text-xs text-[var(--tg-text-muted)]">
-          Manage connected pages and accounts
-        </div>
-          <div className="flex flex-col gap-2">
-            <Button
-              onClick={() => setShowInstagramManager(true)}
-              variant="ghost"
-              className={cn(
-                'app-nav-item w-full',
-                expanded ? 'justify-start' : 'justify-center px-2 py-2'
-              )}
-            >
-              <Instagram className="w-4 h-4 mr-2 text-pink-500" />
-              {expanded && <span>Manage Instagram</span>}
-            </Button>
-            <Button
-              onClick={() => setShowFacebookManager(true)}
-              variant="ghost"
-              className={cn(
-                'app-nav-item w-full',
-                expanded ? 'justify-start' : 'justify-center px-2 py-2'
-              )}
-            >
-              <Settings className="w-4 h-4 mr-2 text-blue-400" />
-              {expanded && <span>Manage Facebook</span>}
-            </Button>
-          </div>
-      </div>
-    );
-  }, [canManageIntegrations, setShowFacebookManager, setShowInstagramManager]);
-
   return (
-    <AppShell user={user} navItems={navigationItems} onLogout={onLogout} sidebarExtras={sidebarExtras}>
+    <AppShell user={user} navItems={navigationItems} onLogout={onLogout}>
       <InboxLayout
         statsSection={
           showError ? (
-            <div className="rounded-2xl border border-red-200/40 bg-red-500/5 px-4 py-3 flex items-center justify-between">
+            <div className="rounded-2xl border border-red-200/40 bg-red-500/5 px-3 py-3 flex items-center justify-between">
               <span className="text-sm text-red-200">{showError}</span>
               <button
                 onClick={() => {
@@ -460,33 +456,75 @@ const InboxContent = ({ user, onLogout }) => {
               </button>
             </div>
           ) : loading && !stats ? (
-            <div className="rounded-2xl border border-[var(--tg-border-soft)] bg-[var(--tg-surface)] px-4 py-6 flex items-center justify-center">
+            <div className="rounded-2xl border border-[var(--tg-border-soft)] bg-[var(--tg-surface)] px-3 py-4 flex items-center justify-center">
               <div className="h-8 w-8 rounded-full border-t-2 border-b-2 border-purple-500 animate-spin" />
             </div>
-          ) : (
-            <div className="rounded-2xl border border-[var(--tg-border-soft)] bg-[var(--tg-surface)] px-4 py-4 flex flex-wrap items-center justify-between gap-3">
-              <div className="text-sm text-[var(--tg-text-secondary)]">
-                <p className="font-semibold text-[var(--tg-text-primary)]">Need the numbers?</p>
-                <p>Conversation metrics moved to the Analytics page for a cleaner Inbox.</p>
-              </div>
-              <Button variant="outline" onClick={() => navigate('/stats')}>
-                Open Analytics
-              </Button>
-            </div>
-          )
+          ) : null
         }
         filterSection={renderFilters()}
       >
         {workspace}
       </InboxLayout>
 
-      {showInstagramManager && (
-        <InstagramAccountManager onClose={() => setShowInstagramManager(false)} />
-      )}
-
-      {showFacebookManager && (
-        <FacebookPageManager onClose={() => setShowFacebookManager(false)} />
-      )}
+      <Sheet open={filterSheetOpen} onOpenChange={setFilterSheetOpen}>
+        <SheetContent
+          side="bottom"
+          className="w-full max-w-full sm:max-w-md mx-auto bg-[var(--tg-surface)] border-t border-[var(--tg-border-soft)] p-6 space-y-5"
+        >
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide">
+              <SlidersHorizontal className="w-4 h-4" />
+              Filters
+            </div>
+            <Button variant="ghost" size="icon" onClick={() => setFilterSheetOpen(false)}>
+              <X className="w-4 h-4" />
+            </Button>
+          </div>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between px-3 py-2.5 rounded-2xl border border-[var(--tg-border-soft)] bg-[var(--tg-surface-muted)]">
+              <span className="text-sm font-medium text-[var(--tg-text-primary)]">Unseen only</span>
+              <Switch checked={chatFilters.unseen} onCheckedChange={() => handleFilterToggle('unseen')} />
+            </div>
+            <div className="flex items-center justify-between px-3 py-2.5 rounded-2xl border border-[var(--tg-border-soft)] bg-[var(--tg-surface-muted)]">
+              <span className="text-sm font-medium text-[var(--tg-text-primary)]">Needs reply</span>
+              <Switch checked={chatFilters.notReplied} onCheckedChange={() => handleFilterToggle('notReplied')} />
+            </div>
+            {canViewAllChats && (
+              <div className="space-y-2">
+                <span className="text-xs uppercase tracking-wide text-[var(--tg-text-muted)]">Assigned to</span>
+                <Select value={chatFilters.assignedTo} onValueChange={handleAssignedFilterChange}>
+                  <SelectTrigger className="w-full bg-[var(--tg-surface)] border-[var(--tg-border-soft)] text-sm">
+                    <SelectValue placeholder="Assigned to" />
+                  </SelectTrigger>
+                  <SelectContent className="bg-[var(--tg-surface)] text-[var(--tg-text-primary)]">
+                    <SelectItem value="all">All agents</SelectItem>
+                    <SelectItem value="unassigned">Unassigned</SelectItem>
+                    {agents.map((agent) => (
+                      <SelectItem key={agent.id} value={agent.id} disabled={!agent.is_active}>
+                        {agent.name} {agent.is_active ? '' : '(inactive)'}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+          </div>
+          <div className="flex flex-col sm:flex-row gap-3">
+            <Button
+              variant="outline"
+              className="flex-1"
+              onClick={() => {
+                handleClearFilters();
+              }}
+            >
+              Clear
+            </Button>
+            <Button className="flex-1" onClick={() => setFilterSheetOpen(false)}>
+              Apply
+            </Button>
+          </div>
+        </SheetContent>
+      </Sheet>
     </AppShell>
   );
 };

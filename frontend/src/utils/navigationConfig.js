@@ -8,7 +8,8 @@ import {
   Users,
   Shield,
   UserPlus,
-  Activity
+  Activity,
+  Plug
 } from 'lucide-react';
 
 export const buildNavigationItems = ({
@@ -16,7 +17,8 @@ export const buildNavigationItems = ({
   canViewUserRoster = false,
   canManagePositions = false,
   canInviteUsers = false,
-  canViewStats = false
+  canViewStats = false,
+  canManageIntegrations = false
 } = {}) => {
   const items = [
     { id: 'inbox', label: 'Direct Messages', icon: MessageCircle, to: '/inbox', exact: true },
@@ -25,6 +27,19 @@ export const buildNavigationItems = ({
     { id: 'whatsapp', label: 'WhatsApp', icon: PhoneCall, disabled: true, badge: 'Soon' },
     { id: 'comments', label: 'Comments & Reviews', icon: MessageSquare, to: '/comments' }
   ];
+
+  if (canManageIntegrations) {
+    items.push({
+      id: 'manage-pages',
+      label: 'Manage connected pages',
+      icon: Plug,
+      type: 'manage-pages',
+      menuItems: [
+        { id: 'instagram', label: 'Manage Instagram', icon: Instagram },
+        { id: 'facebook', label: 'Manage Facebook', icon: Facebook }
+      ]
+    });
+  }
 
   if (canManageTemplates) {
     items.push({ id: 'templates', label: 'Templates', icon: FileText, to: '/templates' });

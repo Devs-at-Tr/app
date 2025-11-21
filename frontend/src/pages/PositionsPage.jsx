@@ -8,6 +8,7 @@ import { buildNavigationItems } from '../utils/navigationConfig';
 const PositionsPage = ({ user, onLogout }) => {
   const canManagePositions = useMemo(() => hasPermission(user, 'position:manage'), [user]);
   const canManageTemplates = useMemo(() => hasPermission(user, 'template:manage'), [user]);
+  const canManageIntegrations = useMemo(() => hasPermission(user, 'integration:manage'), [user]);
   const canViewUserRoster = useMemo(
     () => hasAnyPermission(user, ['position:assign', 'position:manage', 'chat:assign']),
     [user]
@@ -22,9 +23,17 @@ const PositionsPage = ({ user, onLogout }) => {
         canViewUserRoster,
         canManagePositions,
         canInviteUsers,
-        canViewStats
+        canViewStats,
+        canManageIntegrations
       }),
-    [canManageTemplates, canViewUserRoster, canManagePositions, canInviteUsers, canViewStats]
+    [
+      canManageTemplates,
+      canViewUserRoster,
+      canManagePositions,
+      canInviteUsers,
+      canViewStats,
+      canManageIntegrations
+    ]
   );
 
   return (

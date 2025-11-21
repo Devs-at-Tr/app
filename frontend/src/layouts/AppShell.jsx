@@ -1,6 +1,6 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useCallback } from 'react';
 import { NavLink } from 'react-router-dom';
-import { Menu, LogOut, Moon, Sun } from 'lucide-react';
+import { Menu, LogOut, Moon, Sun, ChevronDown } from 'lucide-react';
 import { Sheet, SheetContent } from '../components/ui/sheet';
 import { Button } from '../components/ui/button';
 import { useTheme } from '../context/ThemeContext';
@@ -16,6 +16,16 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '../components/ui/alert-dialog';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger
+} from '../components/ui/dropdown-menu';
+import FacebookPageManager from '../components/FacebookPageManager';
+import InstagramAccountManager from '../components/InstagramAccountManager';
 
 /**
  * Route + layout map
@@ -34,6 +44,8 @@ const AppShell = ({ user, navItems = [], onLogout, children, sidebarExtras = nul
   const { theme, toggleTheme } = useTheme();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [isSidebarExpanded, setSidebarExpanded] = useState(false);
+  const [showInstagramManager, setShowInstagramManager] = useState(false);
+  const [showFacebookManager, setShowFacebookManager] = useState(false);
 
   const roleLabel = useMemo(() => {
     if (user?.position?.name) {
@@ -128,12 +140,22 @@ const AppShell = ({ user, navItems = [], onLogout, children, sidebarExtras = nul
     </AlertDialog>
   );
 
+  const handleManageNavClick = useCallback((destination) => {
+    if (destination === 'instagram') {
+      setShowInstagramManager(true);
+    } else if (destination === 'facebook') {
+      setShowFacebookManager(true);
+    }
+    setMobileNavOpen(false);
+  }, []);
+
   const renderNavList = (expanded) => (
     <nav className="flex flex-col gap-1 mt-6">
       {navItems.map((item) => {
+        const Icon = item.icon;
         const content = (
           <>
-            {item.icon && <item.icon className="w-4 h-4 shrink-0" />}
+            {Icon && <Icon className="w-4 h-4 shrink-0" />}
             {expanded && <span className="truncate app-nav-label">{item.label}</span>}
             {expanded && item.badge && (
               <span className="app-nav-badge text-xs font-semibold px-2 py-0.5 rounded-full shrink-0">
@@ -143,13 +165,62 @@ const AppShell = ({ user, navItems = [], onLogout, children, sidebarExtras = nul
           </>
         );
 
+        if (item.type === 'manage-pages' && item.menuItems?.length) {
+          const menuSide = expanded ? 'bottom' : 'right';
+          const menuAlign = expanded ? 'start' : 'end';
+          return (
+            <DropdownMenu key={item.id}>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  className={cn(
+                    'app-nav-item flex items-center gap-3 px-2.5 py-1.5 rounded-xl text-sm font-medium transition-colors',
+                    'app-nav-item--idle'
+                  )}
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    {content}
+                  </div>
+                  {expanded && <ChevronDown className="w-4 h-4 ml-auto opacity-70" />}
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                side={menuSide}
+                align={menuAlign}
+                sideOffset={expanded ? 6 : 12}
+                className="min-w-[220px] bg-[var(--tg-surface)] border border-[var(--tg-border-soft)] text-[var(--tg-text-primary)]"
+              >
+                <DropdownMenuLabel className="text-xs uppercase tracking-wide text-[var(--tg-text-muted)]">
+                  Manage connected pages
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator className="bg-[var(--tg-border-soft)]" />
+                {item.menuItems.map((menuItem) => {
+                  const MenuIcon = menuItem.icon;
+                  return (
+                    <DropdownMenuItem
+                      key={menuItem.id}
+                      className="flex items-center gap-2"
+                      onSelect={() => {
+                        handleManageNavClick(menuItem.id);
+                      }}
+                    >
+                      {MenuIcon && <MenuIcon className="w-4 h-4" />}
+                      <span>{menuItem.label}</span>
+                    </DropdownMenuItem>
+                  );
+                })}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          );
+        }
+
         if (item.disabled || !item.to) {
           return (
             <button
               key={item.id}
               type="button"
               disabled
-              className="app-nav-item flex items-center gap-3 px-3 py-2 rounded-xl text-sm font-medium opacity-40 cursor-not-allowed"
+              className="app-nav-item flex items-center gap-3 px-2.5 py-1.5 rounded-xl text-sm font-medium opacity-40 cursor-not-allowed"
             >
               {content}
             </button>
@@ -163,7 +234,7 @@ const AppShell = ({ user, navItems = [], onLogout, children, sidebarExtras = nul
             end={item.exact}
             className={({ isActive }) =>
               cn(
-                'app-nav-item flex items-center gap-3 px-3 py-2 rounded-xl text-sm font-medium transition-colors',
+                'app-nav-item flex items-center gap-3 px-2.5 py-1.5 rounded-xl text-sm font-medium transition-colors',
                 isActive ? 'app-nav-item--active' : 'app-nav-item--idle'
               )
             }
@@ -181,7 +252,7 @@ const AppShell = ({ user, navItems = [], onLogout, children, sidebarExtras = nul
     return (
     <div
       className={cn(
-        'flex flex-col h-full px-3 py-6',
+        'flex flex-col h-full px-3 py-4',
         expanded ? 'app-sidebar-expanded' : 'app-sidebar-collapsed'
       )}
     >
@@ -236,7 +307,7 @@ const AppShell = ({ user, navItems = [], onLogout, children, sidebarExtras = nul
   return (
     <div className="app-shell flex min-h-screen bg-[var(--tg-app-bg)] text-[var(--tg-text-primary)]">
       <aside
-        className="app-sidebar hidden lg:flex"
+        className="app-sidebar hidden md:flex"
         onMouseEnter={() => setSidebarExpanded(true)}
         onMouseLeave={() => setSidebarExpanded(false)}
       >
@@ -255,7 +326,7 @@ const AppShell = ({ user, navItems = [], onLogout, children, sidebarExtras = nul
       </Sheet>
 
       <div className="flex-1 flex flex-col min-h-screen">
-        <div className="app-shell__topbar flex items-center justify-between px-4 py-3 border-b border-[var(--tg-border-soft)] bg-[var(--tg-surface)] lg:hidden">
+        <div className="app-shell__topbar flex items-center justify-between px-4 py-3 border-b border-[var(--tg-border-soft)] bg-[var(--tg-surface)] md:hidden">
           <div className="flex items-center gap-2">
             <Button
               variant="ghost"
@@ -280,6 +351,12 @@ const AppShell = ({ user, navItems = [], onLogout, children, sidebarExtras = nul
           {children}
         </main>
       </div>
+      {showInstagramManager && (
+        <InstagramAccountManager onClose={() => setShowInstagramManager(false)} />
+      )}
+      {showFacebookManager && (
+        <FacebookPageManager onClose={() => setShowFacebookManager(false)} />
+      )}
     </div>
   );
 };
