@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, DateTime, ForeignKey, Enum as SQLEnum, Text, Integer, Boolean, BigInteger, Float
+from sqlalchemy import Column, String, DateTime, ForeignKey, Enum as SQLEnum, Text, Integer, Boolean, BigInteger, Float, JSON
 from sqlalchemy.orm import relationship
 from database import Base
 from datetime import datetime, timezone
@@ -248,6 +248,16 @@ class FacebookMessage(ChatMessageMixin, Base):
     chat = relationship("Chat", back_populates="facebook_chat_messages")
     facebook_user = relationship("FacebookUser", back_populates="messages")
     # raw_payload_json = Column(Text, nullable=True)
+
+
+class FacebookWebhookEvent(Base):
+    __tablename__ = "facebook_webhook_events"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    object = Column(String(64), nullable=True)
+    page_id = Column(String(255), nullable=True, index=True)
+    payload = Column(JSON, nullable=False)
+    received_at = Column(DateTime(timezone=True), default=utc_now)
 
 class FacebookPage(Base):
     __tablename__ = "facebook_pages"

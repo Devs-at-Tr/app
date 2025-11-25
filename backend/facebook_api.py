@@ -4,9 +4,11 @@ import hashlib
 import logging
 import os
 from typing import Dict, Any, Optional, List
-from datetime import datetime, timezone
+from datetime import datetime
 from utils.timezone import utc_now
 from enum import Enum
+
+GRAPH_VERSION = os.getenv("GRAPH_VERSION", "v18.0")
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +19,7 @@ class FacebookMode(str, Enum):
 class FacebookMessengerClient:
     """Client for Facebook Messenger API with mock/real mode support"""
     
-    BASE_URL = "https://graph.facebook.com/v17.0"  # Using stable version
+    BASE_URL = f"https://graph.facebook.com/{GRAPH_VERSION}"
 
     async def get_page_feed_with_comments(self, page_access_token: str, page_id: str) -> List[Dict[str, Any]]:
         """Get page feed with comments in a single batch request"""
@@ -577,28 +579,30 @@ class FacebookMessengerClient:
         url = f"{self.BASE_URL}/{user_id}"
         
         params = {
-            "fields": "id,name,username,profile_pic,is_verified_user,follower_count,is_user_follow_business,is_business_follow_user",
+            "fields": "id,name,first_name,last_name,profile_pic,profile_pic_url",
             "access_token": page_access_token
         }
         try:
             response = await self.client.get(url, params=params)
             if response.status_code == 200:
                 profile_data = response.json()
-                
-                full_name = f"{profile.data.get('name', '')}".strip()
+
+                first_name = (profile_data.get("first_name") or "").strip()
+                last_name = (profile_data.get("last_name") or "").strip()
+                full_name = profile_data.get("name") or " ".join(part for part in [first_name, last_name] if part).strip()
                 if not full_name:
-                    full_name = profile_data.get("name") or f"Facebook User {user_id[:8]}"
-                profile = {
+                    full_name = f"Facebook User {user_id[:8]}"
+
+                return {
                     "success": True,
                     "id": profile_data.get("id", user_id),
                     "name": full_name,
-                    "first_name": full_name.split(" ")[0] if full_name else None,
-                    "last_name": full_name.split(" ")[1] if full_name else None,
-                    "profile_pic": profile_data.get("profile_pic"),
+                    "first_name": first_name or None,
+                    "last_name": last_name or None,
+                    "profile_pic": profile_data.get("profile_pic") or profile_data.get("profile_pic_url"),
                     "raw": profile_data,
                     "mode": "real"
                 }
-                return profile
 
             error_data = response.json() if response.content else {}
             error_message = error_data.get("error", {}).get("message", "Unknown error")

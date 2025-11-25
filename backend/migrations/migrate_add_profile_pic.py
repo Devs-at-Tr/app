@@ -65,7 +65,7 @@ def run_migration():
                     pass
 
             conn.commit()
-            print("✓ Successfully ensured profile_pic_url column exists on chats table")
+            print("[OK] Successfully ensured profile_pic_url column exists on chats table")
 
     except Exception as e:
         print(f"⚠ Error during migration: {e}")

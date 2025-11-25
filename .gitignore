@@ -87,3 +87,4 @@ android-sdk/
 .env
 
 public/
+.pytest_cache/

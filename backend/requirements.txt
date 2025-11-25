@@ -10,9 +10,9 @@ cffi==2.0.0
 charset-normalizer==3.4.3
 click==8.3.0
 cryptography==46.0.1
-dnspython==2.8.0
+dnspython==2.8.0 ; python_version >= "3.10"
 ecdsa==0.19.1
-email-validator==2.3.0
+email-validator==2.3.0 ; python_version >= "3.10"
 fastapi==0.110.1
 flake8==7.3.0
 greenlet==3.2.4
@@ -39,7 +39,7 @@ pathspec==0.12.1
 platformdirs==4.4.0
 pluggy==1.6.0
 psycopg2-binary==2.9.10
-pymysql==1.1.0
+pymysql==1.1.2 ; python_version >= "3.10"
 pyasn1==0.6.1
 pycodestyle==2.14.0
 pycparser==2.23

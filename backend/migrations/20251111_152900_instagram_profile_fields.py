@@ -251,7 +251,7 @@ def run_migration(target_engine=None) -> None:
         ensure_message_origin_column(conn, dialect)
         ensure_message_attachment_columns(conn, dialect)
         cleanup_legacy_tables(conn)
-        print("✓ Ensured instagram profile/message schema and cleaned legacy tables")
+        print("[OK] Ensured instagram profile/message schema and cleaned legacy tables")
 
 
 if __name__ == '__main__':

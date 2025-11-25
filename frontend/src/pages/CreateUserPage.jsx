@@ -13,7 +13,7 @@ import { buildNavigationItems } from '../utils/navigationConfig';
 const DEFAULT_FORM = {
   name: '',
   email: '',
-  password: '1234',
+  password: 'TempPass1',
   role: 'agent',
   positionId: ''
 };
@@ -105,8 +105,8 @@ const CreateUserPage = ({ user, onLogout }) => {
       setStatus({ type: 'error', message: 'Name and email are required.' });
       return;
     }
-    if (form.password.length < 4) {
-      setStatus({ type: 'error', message: 'Password is too short.' });
+    if (form.password.length < 8) {
+      setStatus({ type: 'error', message: 'Password must be at least 8 characters.' });
       return;
     }
 
@@ -137,9 +137,19 @@ const CreateUserPage = ({ user, onLogout }) => {
       }
     } catch (err) {
       console.error('User creation failed:', err);
+      const detail = err.response?.data?.detail;
+      let message = 'Unable to create user.';
+      if (typeof detail === 'string') {
+        message = detail;
+      } else if (Array.isArray(detail)) {
+        message = detail
+          .map((item) => item?.msg || item?.message || JSON.stringify(item))
+          .filter(Boolean)
+          .join('; ');
+      }
       setStatus({
         type: 'error',
-        message: err.response?.data?.detail || 'Unable to create user.'
+        message
       });
     } finally {
       setSubmitting(false);

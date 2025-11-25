@@ -163,6 +163,7 @@ const SocialComments = ({ selectedPlatform = 'all' }) => {
   const [replyText, setReplyText] = useState('');
   const [search, setSearch] = useState('');
   const [isProfileOpen, setIsProfileOpen] = useState(false);
+  const [hasFetchedAll, setHasFetchedAll] = useState(false);
   const isMobile = useIsMobile();
 
   const fetchComments = useCallback(async (platform) => {
@@ -230,6 +231,13 @@ const SocialComments = ({ selectedPlatform = 'all' }) => {
     const platformToFetch = activeTab === selectedPlatform ? selectedPlatform : activeTab;
     fetchComments(platformToFetch);
   }, [activeTab, selectedPlatform, fetchComments]);
+
+  useEffect(() => {
+    // Initial bulk fetch to populate all lists when permissions allow
+    if (!hasFetchedAll) {
+      fetchComments('all').finally(() => setHasFetchedAll(true));
+    }
+  }, [hasFetchedAll, fetchComments]);
 
   useEffect(() => {
     const currentList = comments[activeTab] || [];
@@ -580,6 +588,9 @@ const SocialComments = ({ selectedPlatform = 'all' }) => {
       return;
     }
     setActiveTab(tabId);
+    if (!comments[tabId] || comments[tabId].length === 0) {
+      fetchComments(tabId);
+    }
   };
 
   const previewColumn = isMobile ? null : renderPreview();

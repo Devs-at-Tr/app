@@ -1,6 +1,6 @@
 from pathlib import Path
 from dotenv import load_dotenv
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, text, inspect
 import os
 
 ROOT_DIR = Path(__file__).parent.parent
@@ -51,8 +51,13 @@ def _shift_sql(table: str, column: str, dialect: str) -> str:
 def run_migration():
     with engine.begin() as conn:
         dialect = conn.dialect.name.lower()
+        inspector = inspect(conn)
         for table, columns in TARGETS.items():
+            existing_columns = {col["name"] for col in inspector.get_columns(table)}
             for column in columns:
+                if column not in existing_columns:
+                    print(f"[INFO] Skipping {table}.{column}: column does not exist")
+                    continue
                 sql = _shift_sql(table, column, dialect)
                 try:
                     conn.execute(text(sql))

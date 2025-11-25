@@ -4,8 +4,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func, text, or_
-from sqlalchemy.exc import IntegrityError
-from typing import List, Optional, Set, Dict, Any, Tuple, Type, Union
+from sqlalchemy.exc import IntegrityError, OperationalError
+from typing import List, Optional, Set, Dict, Any, Tuple, Union, Type
 from websocket_manager import manager as ws_manager
 import os
 import logging
@@ -19,14 +19,11 @@ from urllib.parse import urlparse
 import re
 import requests
 import hashlib
-import secrets
-import html
 from database import engine, get_db, Base, SessionLocal
 from utils.timezone import utc_now
 from migrations.runner import run_all_migrations as ensure_instagram_profile_schema
 from models import (
     User,
-    Position,
     InstagramAccount,
     Chat,
     UserRole,
@@ -35,10 +32,10 @@ from models import (
     MessageType,
     FacebookPage,
     FacebookUser,
+    FacebookMessage,
     MessagePlatform,
     MessageTemplate,
     InstagramUser,
-    FacebookMessage,
     InstagramMessage as InstagramChatMessage,
     InstagramMessageLog,
     InstagramMessageDirection,
@@ -47,13 +44,13 @@ from models import (
     InstagramMarketingEvent,
     InstagramInsight,
     InstagramInsightScope,
-    PasswordResetToken,
     DBSchemaSnapshot,
     DBSchemaChange,
-    AssignmentCursor
+    AssignmentCursor,
+    FacebookWebhookEvent
 )
 from schemas import (
-    UserRegister, UserLogin, UserResponse, TokenResponse,
+    UserResponse, TokenResponse,
     InstagramConnect, InstagramAccountResponse,
     MessageCreate, MessageResponse,
     ChatAssign, ChatResponse, ChatWithMessages,
@@ -70,17 +67,6 @@ from schemas import (
     InstagramMarketingEventSchema,
     InstagramCommentSchema,
     InstagramInsightSchema,
-    PositionCreate,
-    PositionUpdate,
-    PositionResponse,
-    UserPositionUpdate,
-    UserActiveUpdate,
-    UserRosterEntry,
-    ForgotPasswordRequest,
-    ResetPasswordRequest,
-    AdminUserCreate,
-    AuthConfigResponse,
-    DatabaseOverviewResponse
 )
 from auth import verify_password, get_password_hash, create_access_token, decode_access_token
 from facebook_api import facebook_client, FacebookMode
@@ -89,16 +75,17 @@ from permissions import (
     PermissionCode,
     ensure_default_positions,
     ensure_admin_position_assignments,
-    get_default_position,
     user_has_permissions,
     user_has_any_permission,
-    annotate_user_with_permissions,
     validate_permissions_payload,
     get_permission_definitions,
     is_super_admin_user,
     DEFAULT_POSITION_SLUGS
 )
 from utils.mailer import send_email
+from routes import auth as auth_routes
+from routes import users as user_routes
+from routes.dependencies import get_current_user, get_admin_user, get_admin_only_user, require_super_admin, require_permissions, require_any_permissions, _annotate_user, normalize_email
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -117,19 +104,14 @@ INSTAGRAM_VERIFY_TOKEN = os.getenv("VERIFY_TOKEN") or os.getenv("INSTAGRAM_WEBHO
 
 ChatMessageModel = Union[InstagramChatMessage, FacebookMessage]
 
-ALLOW_PUBLIC_SIGNUP = os.getenv("ALLOW_PUBLIC_SIGNUP", "false").lower() in {"1", "true", "yes"}
-PASSWORD_RESET_TOKEN_LIFETIME_MINUTES = int(os.getenv("PASSWORD_RESET_TOKEN_MINUTES", "60"))
-FRONTEND_BASE_URL = (
-    os.getenv("FRONTEND_BASE_URL")
-    or os.getenv("APP_BASE_URL")
-    or os.getenv("PUBLIC_APP_URL")
-    or os.getenv("FRONTEND_URL")
+from settings import (
+    ALLOW_PUBLIC_SIGNUP,
+    FORGOT_PASSWORD_ENABLED,
+    FRONTEND_BASE_URL,
+    PASSWORD_RESET_EMAIL_CONTACT,
+    PASSWORD_RESET_EMAIL_SUBJECT,
+    PASSWORD_RESET_TOKEN_LIFETIME_MINUTES,
 )
-FORGOT_PASSWORD_ENABLED = os.getenv("ENABLE_FORGOT_PASSWORD", "true").lower() in {"1", "true", "yes"}
-PASSWORD_RESET_EMAIL_SUBJECT = os.getenv(
-    "PASSWORD_RESET_EMAIL_SUBJECT", "Reset your TickleGram password"
-)
-PASSWORD_RESET_EMAIL_CONTACT = os.getenv("SUPPORT_CONTACT_EMAIL", "support@ticklegram.com")
 
 
 def _message_model_for_platform(platform: MessagePlatform) -> Type[ChatMessageModel]:
@@ -219,6 +201,10 @@ app.mount(
 # Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")
 
+@api_router.get("/health")
+def healthcheck():
+    return {"status": "ok"}
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -306,114 +292,12 @@ def prepare_instagram_attachments(
     return prepared
 
 
-def _normalize_slug(value: str) -> str:
-    if not value:
-        raise HTTPException(status_code=400, detail="Slug is required")
-    slug = re.sub(r"[^a-z0-9]+", "-", value.strip().lower()).strip("-")
-    if not slug:
-        raise HTTPException(status_code=400, detail="Slug must include alphanumeric characters")
-    return slug
-
-
-def _ensure_user_role(user: User) -> User:
-    if not user:
-        return user
-    role = getattr(user, "role", None)
-    if isinstance(role, UserRole):
-        return user
-    if isinstance(role, str):
-        normalized = role.strip().lower()
-        if normalized in UserRole._value2member_map_:
-            user.role = UserRole(normalized)
-            return user
-    user.role = UserRole.AGENT
-    return user
-
-
-def _resolve_position_for_user(
-    db: Session,
-    role: Optional[UserRole],
-    position_id: Optional[str],
-) -> Optional[Position]:
-    if position_id:
-        position = db.query(Position).filter(Position.id == position_id).first()
-        if not position:
-            raise HTTPException(status_code=404, detail="Position not found")
-        return position
-    role = role or UserRole.AGENT
-    return get_default_position(db, role)
-
-
-def _normalize_email(value: str) -> str:
-    return (value or "").strip().lower()
-
-
 def _ensure_timezone_aware(dt: Optional[datetime]) -> Optional[datetime]:
     if dt is None:
         return None
     if dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
     return dt
-
-
-def _hash_reset_token(raw_token: str) -> str:
-    return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
-
-
-def _reset_base_url(request: Optional[Request]) -> str:
-    if FRONTEND_BASE_URL:
-        return FRONTEND_BASE_URL.rstrip("/")
-    if request is None:
-        return ""
-    return str(request.base_url).rstrip("/")
-
-
-def _build_password_reset_url(raw_token: str, request: Optional[Request]) -> str:
-    base = _reset_base_url(request)
-    if not base:
-        return f"/reset-password?token={raw_token}"
-    return f"{base}/reset-password?token={raw_token}"
-
-
-def _purge_expired_reset_tokens(db: Session) -> None:
-    db.query(PasswordResetToken).filter(
-        PasswordResetToken.expires_at < utc_now()
-    ).delete(synchronize_session=False)
-
-
-def _send_password_reset_email(email: str, name: Optional[str], reset_url: str) -> None:
-    recipient_name = name or "there"
-    minutes = PASSWORD_RESET_TOKEN_LIFETIME_MINUTES
-    plain_body = (
-        f"Hi {recipient_name},\n\n"
-        "We received a request to reset the password for your TickleGram account. "
-        f"If you made this request, use the link below within {minutes} minutes:\n\n"
-        f"{reset_url}\n\n"
-        "If you didn't request a password reset, you can safely ignore this email or contact support.\n\n"
-        f"Need help? Reach out to us anytime at {PASSWORD_RESET_EMAIL_CONTACT}.\n\n"
-        "— The TickleGram Team"
-    )
-    escaped_name = html.escape(recipient_name)
-    html_body = f"""
-        <p>Hi {escaped_name},</p>
-        <p>We received a request to reset the password for your TickleGram account. If you made this request, click the button below within {minutes} minutes.</p>
-        <p style="text-align:center;margin:24px 0;">
-            <a href="{reset_url}" style="background:#a855f7;color:#fff;padding:12px 20px;border-radius:999px;text-decoration:none;display:inline-block;">
-                Reset password
-            </a>
-        </p>
-        <p>If the button doesn't work, paste this link into your browser:<br/><a href="{reset_url}">{reset_url}</a></p>
-        <p>If you didn't request a password reset, you can ignore this email or contact us at <a href="mailto:{PASSWORD_RESET_EMAIL_CONTACT}">{PASSWORD_RESET_EMAIL_CONTACT}</a>.</p>
-        <p>— The TickleGram Team</p>
-    """
-    delivered = send_email(
-        subject=PASSWORD_RESET_EMAIL_SUBJECT,
-        body_text=plain_body,
-        body_html=html_body,
-        to_addresses=[email],
-    )
-    if not delivered:
-        logger.warning("Password reset email not sent (check SMTP config). Recipient=%s", email)
 
 
 def _humanize_bytes(num_bytes: Optional[int]) -> str:
@@ -846,14 +730,6 @@ def _get_schema_changes_payload(db: Session) -> Dict[str, Any]:
             }
             latest_summary_computed = True
     return payload
-def _annotate_user(user: User) -> User:
-    if not user:
-        return user
-    _ensure_user_role(user)
-    annotate_user_with_permissions(user)
-    return user
-
-
 _CHAT_VIEW_ALL_PERMISSIONS = [
     PermissionCode.CHAT_VIEW_ALL.value,
     PermissionCode.CHAT_VIEW_TEAM.value,
@@ -1094,7 +970,21 @@ def resolve_instagram_access_token(db: Session, page_id: Optional[str]) -> Optio
     """Resolve the best access token for an Instagram page."""
     token: Optional[str] = None
     if page_id:
-        account = db.query(InstagramAccount).filter(InstagramAccount.page_id == page_id).first()
+        account = None
+        try:
+            account = db.query(InstagramAccount).filter(InstagramAccount.page_id == page_id).first()
+        except OperationalError as exc:
+            logger.warning("DB connection lost while resolving IG access token for page %s: %s", page_id, exc)
+            db.rollback()
+            try:
+                with SessionLocal() as retry_session:
+                    account = (
+                        retry_session.query(InstagramAccount)
+                        .filter(InstagramAccount.page_id == page_id)
+                        .first()
+                    )
+            except Exception as retry_exc:
+                logger.error("Retry failed resolving IG access token for page %s: %s", page_id, retry_exc)
         if account and account.access_token:
             token = account.access_token
     if not token:
@@ -1248,6 +1138,34 @@ def hydrate_instagram_chat_messages(chat: Optional[Chat], instagram_msgs: List[I
         return MessageSender.INSTAGRAM_PAGE if sender_enum in {MessageSender.AGENT, MessageSender.INSTAGRAM_PAGE} else MessageSender.INSTAGRAM_USER
 
     synthetic_messages: List[InstagramChatMessage] = []
+
+    def _ts(msg: InstagramChatMessage) -> datetime:
+        if msg.timestamp:
+            return msg.timestamp if msg.timestamp.tzinfo else msg.timestamp.replace(tzinfo=timezone.utc)
+        return utc_now()
+
+    def _is_nearby_duplicate(content: str, sender: MessageSender, ts_value: int) -> bool:
+        """Return True if an existing chat message matches the same sender/content within a generous time window.
+
+        We allow a wide window (72h) to tolerate timezone/clock drift between stored chat messages
+        and instagram_message_logs timestamps.
+        """
+        if not chat.messages:
+            return False
+        normalized_content = content.strip()
+        target_bucket = _bucket(sender)
+        for existing in chat.messages:
+            existing_bucket = _bucket(existing.sender)
+            if existing_bucket != target_bucket:
+                continue
+            if (existing.content or "").strip() != normalized_content:
+                continue
+            existing_ts = _ts(existing)
+            delta_seconds = abs(existing_ts.timestamp() - ts_value)
+            if delta_seconds <= 72 * 3600:  # 72-hour tolerance to absorb timezone/offset differences
+                return True
+        return False
+
     for row in instagram_msgs:
         if row.direction == InstagramMessageDirection.OUTBOUND:
             continue
@@ -1263,6 +1181,8 @@ def hydrate_instagram_chat_messages(chat: Optional[Chat], instagram_msgs: List[I
             except Exception:
                 attachments = []
         resolved = resolve_message_text(row.text, attachments) or "[attachment]"
+        if _is_nearby_duplicate(resolved, row_sender, int(row.ts)):
+            continue
         synthetic = create_chat_message_record(
             chat,
             id=f"ig-history-{row.id}",
@@ -1278,11 +1198,6 @@ def hydrate_instagram_chat_messages(chat: Optional[Chat], instagram_msgs: List[I
 
     if synthetic_messages:
         chat.messages.extend(synthetic_messages)
-
-    def _ts(msg: InstagramChatMessage) -> datetime:
-        if msg.timestamp:
-            return msg.timestamp if msg.timestamp.tzinfo else msg.timestamp.replace(tzinfo=timezone.utc)
-        return utc_now()
 
     chat.messages.sort(key=_ts)
 
@@ -1536,448 +1451,6 @@ async def get_current_user(authorization: Optional[str] = Header(None), db: Sess
     
     return _annotate_user(user)
 
-# Dependency for admin only
-async def get_admin_user(current_user: User = Depends(get_current_user)) -> User:
-    if current_user.role != UserRole.ADMIN:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin access required"
-        )
-    return current_user
-
-async def get_admin_only_user(current_user: User = Depends(get_current_user)) -> User:
-    if current_user.role != UserRole.ADMIN:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin access required"
-        )
-    return current_user
-
-def require_super_admin(current_user: User = Depends(get_current_user)) -> User:
-    if is_super_admin_user(current_user):
-        return current_user
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail="Super admin access required"
-    )
-
-# ============= AUTH ENDPOINTS =============
-
-@api_router.post("/auth/register", response_model=UserResponse)
-def register(user_data: UserRegister, db: Session = Depends(get_db)):
-    # Check if user exists
-    existing_user = db.query(User).filter(User.email == user_data.email).first()
-    if existing_user:
-        raise HTTPException(status_code=400, detail="Email already registered")
-    
-    # Create new user
-    new_user = User(
-        name=user_data.name,
-        email=user_data.email,
-        password_hash=get_password_hash(user_data.password),
-        role=user_data.role
-    )
-    position = _resolve_position_for_user(db, user_data.role, user_data.position_id)
-    if position:
-        new_user.position_id = position.id
-    db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
-    
-    logger.info(f"User registered: {new_user.email}")
-    return _annotate_user(new_user)
-
-@api_router.post("/auth/signup", response_model=UserResponse)
-def signup(
-    user_data: UserRegister,
-    db: Session = Depends(get_db)
-):
-    """Public endpoint to create new agent accounts."""
-    if not ALLOW_PUBLIC_SIGNUP:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Public signup is disabled")
-    normalized_email = _normalize_email(user_data.email)
-    existing_user = db.query(User).filter(func.lower(User.email) == normalized_email).first()
-    if existing_user:
-        raise HTTPException(status_code=400, detail="Email already registered")
-
-    # Only allow agent role for public signup
-    role = UserRole.AGENT
-
-    new_user = User(
-        name=user_data.name,
-        email=normalized_email,
-        password_hash=get_password_hash(user_data.password),
-        role=role
-    )
-    position = _resolve_position_for_user(db, role, None)
-    if position:
-        new_user.position_id = position.id
-    db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
-
-    logger.info(f"New agent registered: {new_user.email}")
-    return _annotate_user(new_user)
-
-
-@api_router.get("/auth/config", response_model=AuthConfigResponse)
-def auth_config():
-    return AuthConfigResponse(
-        allow_public_signup=ALLOW_PUBLIC_SIGNUP,
-        forgot_password_enabled=FORGOT_PASSWORD_ENABLED,
-    )
-
-
-@api_router.post("/auth/forgot-password")
-def request_password_reset(
-    payload: ForgotPasswordRequest,
-    request: Request,
-    db: Session = Depends(get_db)
-):
-    if not FORGOT_PASSWORD_ENABLED:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
-
-    normalized_email = _normalize_email(payload.email)
-    _purge_expired_reset_tokens(db)
-
-    user = db.query(User).filter(func.lower(User.email) == normalized_email).first()
-    raw_token: Optional[str] = None
-
-    if user:
-        db.query(PasswordResetToken).filter(
-            PasswordResetToken.user_id == user.id,
-            PasswordResetToken.used_at.is_(None),
-        ).delete(synchronize_session=False)
-
-        raw_token = secrets.token_urlsafe(48)
-        reset_token = PasswordResetToken(
-            user_id=user.id,
-            token_hash=_hash_reset_token(raw_token),
-            expires_at=utc_now() + timedelta(minutes=PASSWORD_RESET_TOKEN_LIFETIME_MINUTES),
-        )
-        db.add(reset_token)
-
-    try:
-        db.commit()
-    except IntegrityError:
-        db.rollback()
-        logger.exception("Failed to persist password reset token for %s", normalized_email)
-        raise HTTPException(status_code=500, detail="Unable to process request at this time")
-
-    if user and raw_token:
-        reset_url = _build_password_reset_url(raw_token, request)
-        _send_password_reset_email(user.email, user.name, reset_url)
-        logger.info("Password reset email queued for %s", user.email)
-
-    return {"message": "If an account exists for that email, a reset link has been sent."}
-
-
-@api_router.post("/auth/reset-password")
-def reset_password(payload: ResetPasswordRequest, db: Session = Depends(get_db)):
-    if not FORGOT_PASSWORD_ENABLED:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
-
-    token_hash = _hash_reset_token(payload.token)
-    token_record = (
-        db.query(PasswordResetToken)
-        .filter(PasswordResetToken.token_hash == token_hash)
-        .first()
-    )
-    now = utc_now()
-    expires_at = _ensure_timezone_aware(token_record.expires_at)
-
-    if not token_record or token_record.used_at is not None or expires_at is None or expires_at < now:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired reset token")
-
-    user = db.query(User).filter(User.id == token_record.user_id).first()
-    if not user:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired reset token")
-
-    user.password_hash = get_password_hash(payload.password)
-    token_record.used_at = now
-
-    other_tokens = (
-        db.query(PasswordResetToken)
-        .filter(
-            PasswordResetToken.user_id == token_record.user_id,
-            PasswordResetToken.used_at.is_(None),
-            PasswordResetToken.id != token_record.id,
-        )
-        .all()
-    )
-    for other in other_tokens:
-        other.used_at = now
-
-    db.commit()
-    logger.info("Password reset completed for %s", user.email)
-    return {"message": "Password updated successfully."}
-
-@api_router.post("/auth/login", response_model=TokenResponse)
-def login(credentials: UserLogin, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.email == credentials.email).first()
-    
-    if not user or not verify_password(credentials.password, user.password_hash):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect email or password"
-        )
-    
-    access_token = create_access_token(data={"user_id": user.id, "email": user.email})
-    user = _annotate_user(user)
-    
-    logger.info(f"User logged in: {user.email}")
-    return TokenResponse(
-        access_token=access_token,
-        user=UserResponse.model_validate(user)
-    )
-
-@api_router.get("/auth/me", response_model=UserResponse)
-def get_me(current_user: User = Depends(get_current_user)):
-    return current_user
-
-# ============= USER MANAGEMENT ENDPOINTS =============
-
-@api_router.get("/users", response_model=List[UserResponse])
-def list_users(current_user: User = Depends(get_admin_user), db: Session = Depends(get_db)):
-    users = db.query(User).options(joinedload(User.position)).all()
-    return [_annotate_user(user) for user in users]
-
-@api_router.get("/users/agents", response_model=List[UserResponse])
-def list_agents(
-    include_inactive: bool = False,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    query = db.query(User).options(joinedload(User.position)).filter(User.role == UserRole.AGENT)
-    if not include_inactive:
-        query = query.filter(User.is_active.is_(True))
-    agents = query.all()
-    assignable = [agent for agent in agents if _is_assignable_agent(agent)]
-    return [_annotate_user(agent) for agent in assignable]
-
-
-@api_router.get("/users/roster", response_model=List[UserRosterEntry])
-def user_roster(
-    current_user: User = Depends(require_any_permissions(PermissionCode.POSITION_ASSIGN, PermissionCode.POSITION_MANAGE, PermissionCode.CHAT_ASSIGN)),
-    db: Session = Depends(get_db)
-):
-    viewer_is_super_admin = is_super_admin_user(current_user)
-    counts = {
-        row[0]: row[1]
-        for row in (
-            db.query(Chat.assigned_to, func.count(Chat.id))
-            .filter(Chat.assigned_to.isnot(None))
-            .group_by(Chat.assigned_to)
-            .all()
-        )
-        if row[0]
-    }
-    users = db.query(User).options(joinedload(User.position)).all()
-    roster: List[UserRosterEntry] = []
-    for user in users:
-        annotated = _annotate_user(user)
-        user_payload = UserResponse.model_validate(annotated).model_dump()
-        if not viewer_is_super_admin:
-            position_payload = user_payload.get("position")
-            if position_payload and position_payload.get("slug") == DEFAULT_POSITION_SLUGS["super_admin"]:
-                # Hide the explicit super-admin label from non super-admin viewers
-                user_payload["position"] = None
-        user_payload["assigned_chat_count"] = int(counts.get(user.id, 0) or 0)
-        roster.append(UserRosterEntry.model_validate(user_payload))
-    return roster
-
-@api_router.patch("/users/{user_id}/active", response_model=UserResponse)
-def update_user_active_state(
-    user_id: str,
-    payload: UserActiveUpdate,
-    current_user: User = Depends(require_permissions(PermissionCode.POSITION_MANAGE)),
-    db: Session = Depends(get_db)
-):
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    if user.id == current_user.id and not payload.is_active:
-        logger.warning("User %s attempted to deactivate their own account", current_user.email)
-    user.is_active = payload.is_active
-    db.commit()
-    db.refresh(user)
-    return UserResponse.model_validate(_annotate_user(user))
-
-
-@api_router.post("/admin/users", response_model=UserResponse)
-def admin_create_user(
-    user_data: AdminUserCreate,
-    current_user: User = Depends(require_any_permissions(PermissionCode.USER_INVITE)),
-    db: Session = Depends(get_db)
-):
-    normalized_email = _normalize_email(user_data.email)
-    existing_user = db.query(User).filter(func.lower(User.email) == normalized_email).first()
-    if existing_user:
-        raise HTTPException(status_code=400, detail="Email already registered")
-
-    new_user = User(
-        name=user_data.name.strip(),
-        email=normalized_email,
-        password_hash=get_password_hash(user_data.password),
-        role=user_data.role or UserRole.AGENT,
-    )
-    position = _resolve_position_for_user(db, user_data.role, user_data.position_id)
-    if position:
-        new_user.position_id = position.id
-
-    db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
-
-    logger.info("User %s created by %s", new_user.email, current_user.email)
-    return UserResponse.model_validate(_annotate_user(new_user))
-
-
-# ============= DEVELOPER UTILITIES =============
-
-@api_router.get("/dev/db-overview", response_model=DatabaseOverviewResponse)
-def get_database_overview(
-    current_user: User = Depends(require_super_admin),
-    db: Session = Depends(get_db)
-):
-    overview = _collect_database_overview(db)
-    schema_structure = overview.pop("schema_structure", None)
-    try:
-        _record_schema_snapshot_if_changed(db, schema_structure)
-    except Exception as exc:
-        logger.warning("Schema snapshot update failed: %s", exc)
-    schema_changes = _get_schema_changes_payload(db)
-    return DatabaseOverviewResponse(
-        summary=overview["summary"],
-        tables=overview["tables"],
-        relationships=overview["relationships"],
-        storage=overview["storage"],
-        schema_changes=schema_changes
-    )
-
-
-# ============= POSITION MANAGEMENT ENDPOINTS =============
-
-@api_router.get("/positions", response_model=List[PositionResponse])
-def list_positions(
-    current_user: User = Depends(require_any_permissions(
-        PermissionCode.POSITION_MANAGE,
-        PermissionCode.POSITION_ASSIGN
-    )),
-    db: Session = Depends(get_db)
-):
-    query = db.query(Position).order_by(Position.created_at.asc())
-    if not is_super_admin_user(current_user):
-        query = query.filter(Position.slug != DEFAULT_POSITION_SLUGS["super_admin"])
-    positions = query.all()
-    return positions
-
-
-@api_router.post("/positions", response_model=PositionResponse)
-def create_position(
-    position_data: PositionCreate,
-    current_user: User = Depends(require_permissions(PermissionCode.POSITION_MANAGE)),
-    db: Session = Depends(get_db)
-):
-    slug = _normalize_slug(position_data.slug or position_data.name)
-    if slug == DEFAULT_POSITION_SLUGS["super_admin"] and not is_super_admin_user(current_user):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only Super Admins can create this position")
-    existing = db.query(Position).filter(Position.slug == slug).first()
-    if existing:
-        raise HTTPException(status_code=400, detail="Position slug already exists")
-    position = Position(
-        name=position_data.name.strip(),
-        slug=slug,
-        description=position_data.description,
-        is_system=position_data.is_system,
-    )
-    position.permissions = validate_permissions_payload(position_data.permissions)
-    db.add(position)
-    db.commit()
-    db.refresh(position)
-    return position
-
-
-@api_router.put("/positions/{position_id}", response_model=PositionResponse)
-def update_position(
-    position_id: str,
-    position_data: PositionUpdate,
-    current_user: User = Depends(require_permissions(PermissionCode.POSITION_MANAGE)),
-    db: Session = Depends(get_db)
-):
-    position = db.query(Position).filter(Position.id == position_id).first()
-    if not position:
-        raise HTTPException(status_code=404, detail="Position not found")
-    if position.slug == DEFAULT_POSITION_SLUGS["super_admin"] and not is_super_admin_user(current_user):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only Super Admins can edit this position")
-    if position_data.name:
-        position.name = position_data.name.strip()
-    if position_data.description is not None:
-        position.description = position_data.description
-    if position_data.permissions is not None:
-        position.permissions = validate_permissions_payload(position_data.permissions)
-    db.commit()
-    db.refresh(position)
-    return position
-
-
-@api_router.delete("/positions/{position_id}")
-def delete_position(
-    position_id: str,
-    current_user: User = Depends(require_permissions(PermissionCode.POSITION_MANAGE)),
-    db: Session = Depends(get_db)
-):
-    position = db.query(Position).filter(Position.id == position_id).first()
-    if not position:
-        raise HTTPException(status_code=404, detail="Position not found")
-    if position.is_system:
-        raise HTTPException(status_code=400, detail="System positions cannot be deleted")
-    in_use = db.query(User).filter(User.position_id == position_id).count()
-    if in_use:
-        raise HTTPException(
-            status_code=400,
-            detail="Cannot delete a position that is currently assigned to users"
-        )
-    db.delete(position)
-    db.commit()
-    return {"success": True, "position_id": position_id}
-
-
-@api_router.post("/users/{user_id}/position", response_model=UserResponse)
-def assign_position_to_user(
-    user_id: str,
-    payload: UserPositionUpdate,
-    current_user: User = Depends(require_permissions(PermissionCode.POSITION_ASSIGN)),
-    db: Session = Depends(get_db)
-):
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    if user.id == current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You cannot change your own position"
-        )
-    if payload.position_id:
-        position = db.query(Position).filter(Position.id == payload.position_id).first()
-        if not position:
-            raise HTTPException(status_code=404, detail="Position not found")
-        if position.slug == DEFAULT_POSITION_SLUGS["super_admin"] and not is_super_admin_user(current_user):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only Super Admins can assign this position")
-        user.position_id = position.id
-    else:
-        user.position_id = None
-    db.commit()
-    db.refresh(user)
-    return _annotate_user(user)
-
-
-@api_router.get("/permissions/codes")
-def list_permission_codes_endpoint(
-    current_user: User = Depends(require_permissions(PermissionCode.POSITION_MANAGE))
-):
-    return get_permission_definitions()
-
 # ============= INSTAGRAM ENDPOINTS =============
 
 @api_router.get("/instagram/comments")
@@ -1987,11 +1460,14 @@ async def list_instagram_comments(
 ):
     """List all Instagram comments from posts and reels"""
     try:
-        # Get all connected Instagram accounts
+        # Get connected Instagram accounts. Super admins can see all.
         accounts = db.query(InstagramAccount).filter(
             InstagramAccount.user_id == current_user.id
         ).all()
-        print("Accounts : ",accounts)
+        # If agent has comment moderation visibility (or is super admin), allow workspace-wide view
+        if not accounts and (is_super_admin_user(current_user) or user_has_permissions(current_user, [PermissionCode.COMMENT_MODERATE])):
+            accounts = db.query(InstagramAccount).all()
+        print("Accounts : ", accounts)
         if not accounts:
             logger.info(f"No Instagram accounts found for user {current_user.id}")
             return []
@@ -4372,11 +3848,24 @@ async def handle_facebook_webhook(request: Request, db: Session = Depends(get_db
         # Parse webhook data
         data = await request.json()
         logger.info(f"Received Facebook webhook: {data.get('object')}")
+        event_entry = data.get("entry", [])
+        first_entry = event_entry[0] if isinstance(event_entry, list) and event_entry else {}
+        event_page_id = first_entry.get("id") if isinstance(first_entry, dict) else None
+        webhook_event = FacebookWebhookEvent(
+            object=data.get("object"),
+            page_id=event_page_id,
+            payload=data
+        )
+        db.add(webhook_event)
+        db.flush()
+        processed_messaging_event = False
         
         # Process webhook entries
         if data.get("object") == "page":
             for entry in data.get("entry", []):
                 page_id = entry.get("id")
+                if not webhook_event.page_id and page_id:
+                    webhook_event.page_id = page_id
                 
                 # Get Facebook page from database
                 fb_page = db.query(FacebookPage).filter(FacebookPage.page_id == page_id).first()
@@ -4418,13 +3907,41 @@ async def handle_facebook_webhook(request: Request, db: Session = Depends(get_db
                         need_profile = not chat or (chat and chat.username.startswith(("FB User", "User")))
                         if need_profile:
                             FACEBOOK_ACCESS_TOKEN_BACKUP = os.getenv("FACEBOOK_ACCESS_TOKEN_BACKUP") 
-                            profile = await facebook_client.get_user_profile(
-                                # page_access_token=fb_page.access_token, // for privacy reasons, use backup token
-                                page_access_token=FACEBOOK_ACCESS_TOKEN_BACKUP,
-                                user_id=sender_id
-                            )
+                            page_access_token = fb_page.access_token or FACEBOOK_ACCESS_TOKEN_BACKUP
+                            if not page_access_token:
+                                logger.warning("Missing page access token for Facebook profile lookup; skipping name fetch")
+                            else:
+                                profile = await facebook_client.get_user_profile(
+                                    page_access_token=page_access_token,
+                                    user_id=sender_id
+                                )
 
                         profile_name = profile.get("name") if isinstance(profile, dict) else None
+                        if not profile_name and isinstance(profile, dict):
+                            first_name = profile.get("first_name")
+                            last_name = profile.get("last_name")
+                            full_name = " ".join(part for part in [first_name, last_name] if part).strip()
+                            profile_name = full_name or None
+                        if not profile_name:
+                            backup_token = os.getenv("FACEBOOK_ACCESS_TOKEN_BACKUP")
+                            if not backup_token:
+                                logger.error("FACEBOOK_ACCESS_TOKEN_BACKUP is not set; cannot fetch Facebook user name via Graph API")
+                            else:
+                                graph_url = f"https://graph.facebook.com/v17.0/{sender_id}?fields=name&access_token={backup_token}"
+                                try:
+                                    graph_resp = requests.get(graph_url, timeout=5)
+                                except requests.RequestException as exc:
+                                    logger.error("Graph API user name lookup failed for %s: %s", sender_id, exc)
+                                else:
+                                    if graph_resp.status_code == 200:
+                                        profile_name = (graph_resp.json() or {}).get("name") or profile_name
+                                    else:
+                                        logger.warning(
+                                            "Graph API user name lookup failed for %s: status=%s body=%s",
+                                            sender_id,
+                                            graph_resp.status_code,
+                                            graph_resp.text
+                                        )
                         profile_pic_url = profile.get("profile_pic") if isinstance(profile, dict) else None
                         if not profile_pic_url and isinstance(profile, dict):
                             profile_pic_url = profile.get("profile_pic_url")
@@ -4498,6 +4015,7 @@ async def handle_facebook_webhook(request: Request, db: Session = Depends(get_db
                         
                         db.commit()
                         db.refresh(new_message)
+                        processed_messaging_event = True
                         logger.info(f"Processed Facebook message from {sender_id} on page {page_id}")
                         
                         # Notify relevant users about new message
@@ -4522,6 +4040,9 @@ async def handle_facebook_webhook(request: Request, db: Session = Depends(get_db
                             "message": message_payload
                         })
         
+        if not processed_messaging_event:
+            db.commit()
+
         return {"status": "received"}
     
     except Exception as e:
@@ -4644,6 +4165,8 @@ async def websocket_endpoint(
 
 
 # Include the router in the main app
+app.include_router(auth_routes.router, prefix="/api")
+app.include_router(user_routes.router, prefix="/api")
 app.include_router(api_router)
 
 # Configure CORS

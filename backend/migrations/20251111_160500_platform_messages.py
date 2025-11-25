@@ -6,6 +6,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Connection
+from sqlalchemy.exc import OperationalError
 import os
 from typing import Optional
 
@@ -117,6 +118,8 @@ def upsert_facebook_user(conn: Connection, dialect: str, payload: dict) -> None:
 def migrate_facebook_metadata(conn: Connection, dialect: str) -> None:
     if not column_exists(conn, "chats", "facebook_user_id"):
         return
+    if not column_exists(conn, "chats", "profile_pic_url"):
+        conn.execute(text("ALTER TABLE chats ADD COLUMN profile_pic_url TEXT NULL"))
     rows = conn.execute(text("""
         SELECT id, instagram_user_id, facebook_user_id, username, profile_pic_url, last_message
         FROM chats
@@ -141,13 +144,22 @@ def migrate_facebook_metadata(conn: Connection, dialect: str) -> None:
         conn.execute(text(update_sql), params)
 
 
+def _safe_execute(conn: Connection, statement):
+    try:
+        return conn.execute(statement)
+    except OperationalError:
+        return None
+
+
 def migrate_messages(conn: Connection) -> None:
     if not table_exists(conn, "messages"):
+        return
+    if not column_exists(conn, "messages", "chat_id"):
         return
     instagram_count = conn.execute(text("SELECT COUNT(1) FROM instagram_messages")).scalar() or 0
     facebook_count = conn.execute(text("SELECT COUNT(1) FROM facebook_messages")).scalar() or 0
     if instagram_count == 0:
-        conn.execute(text("""
+        _safe_execute(conn, text("""
             INSERT INTO instagram_messages (
                 id, chat_id, instagram_user_id, sender, content, message_type,
                 platform, timestamp, attachments_json, metadata_json, is_gif, is_ticklegram
@@ -167,7 +179,7 @@ def migrate_messages(conn: Connection) -> None:
               )
         """))
     if facebook_count == 0:
-        conn.execute(text("""
+        _safe_execute(conn, text("""
             INSERT INTO facebook_messages (
                 id, chat_id, facebook_user_id, sender, content, message_type,
                 platform, timestamp, attachments_json, metadata_json, is_gif, is_ticklegram
@@ -180,7 +192,7 @@ def migrate_messages(conn: Connection) -> None:
             WHERE m.platform = 'FACEBOOK'
               AND c.facebook_user_id IS NOT NULL
         """))
-    conn.execute(text("DROP TABLE IF EXISTS messages"))
+    _safe_execute(conn, text("DROP TABLE IF EXISTS messages"))
 
 
 def run_migration(target_engine=None) -> None:
@@ -192,7 +204,7 @@ def run_migration(target_engine=None) -> None:
         ensure_chat_columns(conn, dialect)
         migrate_facebook_metadata(conn, dialect)
         migrate_messages(conn)
-        print("✓ Platform-specific message tables ready")
+        print("[OK] Platform-specific message tables ready")
 
 
 if __name__ == "__main__":
