@@ -548,6 +548,9 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
                   originLabel = `Sent by ${sentByName}`;
                 }
                 const attachments = Array.isArray(msg.attachments) ? msg.attachments : [];
+                const hasStoryMention = attachments.some(
+                  (attachment) => attachment && typeof attachment === 'object' && attachment.type === 'story_mention'
+                );
                 const hasAttachments = attachments.length > 0;
                 const placeholderText = (msg.content || '').trim().toLowerCase();
                 const hideText = hasAttachments && (placeholderText === '[attachment]' || placeholderText === '');
@@ -594,6 +597,11 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
                         {originLabel && (
                           <p className="message-origin italic mt-1">
                             {originLabel}
+                          </p>
+                        )}
+                        {hasStoryMention && (
+                          <p className="message-origin italic mt-1 text-purple-200">
+                            Story mention
                           </p>
                         )}
                         {attachments.length > 0 && (

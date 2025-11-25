@@ -101,6 +101,7 @@ INSTAGRAM_PAGE_ID = os.getenv("INSTAGRAM_PAGE_ID") or os.getenv("PAGE_ID") or os
 FACEBOOK_APP_ID = os.getenv("FACEBOOK_APP_ID") or os.getenv("META_APP_ID")
 INSTAGRAM_PAGE_ACCESS_TOKEN = os.getenv("INSTAGRAM_PAGE_ACCESS_TOKEN") or os.getenv("PAGE_ACCESS_TOKEN") or os.getenv("FACEBOOK_PAGE_ACCESS_TOKEN")
 INSTAGRAM_VERIFY_TOKEN = os.getenv("VERIFY_TOKEN") or os.getenv("INSTAGRAM_WEBHOOK_VERIFY_TOKEN") or os.getenv("FACEBOOK_WEBHOOK_VERIFY_TOKEN")
+FACEBOOK_ACCESS_TOKEN_BACKUP = os.getenv("FACEBOOK_ACCESS_TOKEN_BACKUP")
 
 ChatMessageModel = Union[InstagramChatMessage, FacebookMessage]
 
@@ -290,6 +291,57 @@ def prepare_instagram_attachments(
             entry["public_url"] = source_url
         prepared.append(entry)
     return prepared
+
+
+def _get_facebook_page_token(db: Session, page_id: Optional[str]) -> Optional[str]:
+    """Return the stored token for a Facebook page if available."""
+    if not page_id:
+        return None
+    page = (
+        db.query(FacebookPage)
+        .filter(FacebookPage.page_id == page_id, FacebookPage.is_active.is_(True))
+        .first()
+    )
+    if page and page.access_token:
+        return page.access_token
+    return None
+
+
+def _resolve_facebook_profile_token(
+    db: Session,
+    facebook_user_id: Optional[str],
+    preferred_page: Optional[FacebookPage] = None,
+) -> Tuple[Optional[str], Optional[str], str]:
+    """
+    Determine the best token to query the Graph API for a Facebook user's profile.
+
+    Order of preference:
+    1. Page token from the currently processed page/webhook.
+    2. Page token from the most recent chat linked to the Facebook user.
+    3. Backup token (FACEBOOK_ACCESS_TOKEN_BACKUP).
+    """
+    if preferred_page and preferred_page.access_token:
+        return preferred_page.access_token, preferred_page.page_id, "current_page"
+    if preferred_page and preferred_page.page_id:
+        token = _get_facebook_page_token(db, preferred_page.page_id)
+        if token:
+            return token, preferred_page.page_id, "current_page"
+
+    if facebook_user_id:
+        chat = (
+            db.query(Chat)
+            .filter(Chat.facebook_user_id == facebook_user_id, Chat.facebook_page_id.isnot(None))
+            .order_by(Chat.updated_at.desc())
+            .first()
+        )
+        if chat and chat.facebook_page_id:
+            token = _get_facebook_page_token(db, chat.facebook_page_id)
+            if token:
+                return token, chat.facebook_page_id, "chat_history"
+
+    if FACEBOOK_ACCESS_TOKEN_BACKUP:
+        return FACEBOOK_ACCESS_TOKEN_BACKUP, None, "backup"
+    return None, None, "none"
 
 
 def _ensure_timezone_aware(dt: Optional[datetime]) -> Optional[datetime]:
@@ -1021,6 +1073,9 @@ def _extract_attachment_summary(attachments: List[Any]) -> Optional[str]:
                 continue
             attachment_type = attachment.get("type")
             payload = attachment.get("payload") or {}
+            if attachment_type == "story_mention":
+                # Explicit label so story mentions are visible even without message text
+                return "Story mention"
 
             if attachment_type == "template":
                 generic = payload.get("generic") or {}
@@ -3906,15 +3961,31 @@ async def handle_facebook_webhook(request: Request, db: Session = Depends(get_db
                         profile: Dict[str, Any] = {}
                         need_profile = not chat or (chat and chat.username.startswith(("FB User", "User")))
                         if need_profile:
-                            FACEBOOK_ACCESS_TOKEN_BACKUP = os.getenv("FACEBOOK_ACCESS_TOKEN_BACKUP") 
-                            page_access_token = fb_page.access_token or FACEBOOK_ACCESS_TOKEN_BACKUP
-                            if not page_access_token:
-                                logger.warning("Missing page access token for Facebook profile lookup; skipping name fetch")
+                            token, token_page_id, token_source = _resolve_facebook_profile_token(
+                                db,
+                                facebook_user_id=sender_id,
+                                preferred_page=fb_page
+                            )
+                            if not token:
+                                logger.warning(
+                                    "No access token available for Facebook profile lookup (user=%s)",
+                                    sender_id
+                                )
                             else:
-                                profile = await facebook_client.get_user_profile(
-                                    page_access_token=page_access_token,
+                                profile_result = await facebook_client.get_user_profile(
+                                    page_access_token=token,
                                     user_id=sender_id
                                 )
+                                if profile_result.get("success"):
+                                    profile = profile_result
+                                else:
+                                    logger.warning(
+                                        "Facebook profile lookup failed for %s via %s token (page=%s): %s",
+                                        sender_id,
+                                        token_source,
+                                        token_page_id or "n/a",
+                                        profile_result.get("error")
+                                    )
 
                         profile_name = profile.get("name") if isinstance(profile, dict) else None
                         if not profile_name and isinstance(profile, dict):
@@ -3923,11 +3994,10 @@ async def handle_facebook_webhook(request: Request, db: Session = Depends(get_db
                             full_name = " ".join(part for part in [first_name, last_name] if part).strip()
                             profile_name = full_name or None
                         if not profile_name:
-                            backup_token = os.getenv("FACEBOOK_ACCESS_TOKEN_BACKUP")
-                            if not backup_token:
+                            if not FACEBOOK_ACCESS_TOKEN_BACKUP:
                                 logger.error("FACEBOOK_ACCESS_TOKEN_BACKUP is not set; cannot fetch Facebook user name via Graph API")
                             else:
-                                graph_url = f"https://graph.facebook.com/v17.0/{sender_id}?fields=name&access_token={backup_token}"
+                                graph_url = f"https://graph.facebook.com/{GRAPH_VERSION}/{sender_id}?fields=name&access_token={FACEBOOK_ACCESS_TOKEN_BACKUP}"
                                 try:
                                     graph_resp = requests.get(graph_url, timeout=5)
                                 except requests.RequestException as exc:
