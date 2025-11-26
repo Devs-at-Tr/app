@@ -66,7 +66,7 @@ class TickleGramBackendTester:
         print("\n=== Testing Admin Authentication ===")
         
         login_data = {
-            "email": "admin@ticklegram.com",
+            "identifier": "admin@ticklegram.com",
             "password": "admin123"
         }
         

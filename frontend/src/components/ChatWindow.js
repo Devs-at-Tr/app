@@ -19,7 +19,7 @@ import {
   DialogTitle,
 } from './ui/dialog';
 import { Badge } from './ui/badge';
-import { Send, UserPlus, Instagram, FileText, CheckCircle, Search, X, ChevronLeft, Info } from 'lucide-react';
+import { Send, UserPlus, Instagram, FileText, CheckCircle, Search, X, ChevronLeft, Info, CornerUpLeft, Smile, Paperclip } from 'lucide-react';
 import axios from 'axios';
 import { API, BACKEND_URL } from '../App';
 import { useIsMobile, useIsTablet } from '../hooks/useMediaQuery';
@@ -39,11 +39,71 @@ const getChatDisplayName = (chat) =>
   chat?.username ||
   'Unknown';
 
+const extractTemplatePayload = (attachments = []) => {
+  if (!Array.isArray(attachments)) {
+    return null;
+  }
+  for (const attachment of attachments) {
+    if (!attachment || attachment.type !== 'template') {
+      continue;
+    }
+    const payload = attachment.payload || {};
+    const elements =
+      (payload.generic && payload.generic.elements) ||
+      payload.elements ||
+      [];
+    if (!Array.isArray(elements) || elements.length === 0) {
+      continue;
+    }
+    const [first] = elements;
+    const buttons = Array.isArray(first?.buttons) ? first.buttons : [];
+    return {
+      title: first?.title || '',
+      buttons,
+    };
+  }
+  return null;
+};
+
+const getMessageSnippet = (message) => {
+  if (!message) {
+    return '';
+  }
+  const content = (message.content || '').trim();
+  if (content && content.toLowerCase() !== '[attachment]') {
+    return content;
+  }
+  const templatePayload = extractTemplatePayload(message.attachments);
+  if (templatePayload?.title) {
+    return templatePayload.title;
+  }
+  if (Array.isArray(message.attachments) && message.attachments.length > 0) {
+    return '[attachment]';
+  }
+  return '';
+};
+
 const FacebookIcon = ({ className }) => (
   <svg className={className} viewBox="0 0 24 24" fill="currentColor">
     <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
   </svg>
 );
+
+const getSenderLabel = (message, chat) => {
+  const sender = (message?.sender || '').toString().toLowerCase();
+  if (sender === 'agent' || sender === 'instagram_page') {
+    return 'You';
+  }
+  if (message?.sent_by?.name) {
+    return message.sent_by.name;
+  }
+  return (
+    chat?.instagram_user?.name ||
+    chat?.facebook_user?.name ||
+    chat?.username ||
+    'User'
+  );
+};
 
 const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, onBackToList }) => {
   const { selectedChat: chat, sendMessage } = useChatContext();
@@ -58,7 +118,16 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
   const [selectedTemplate, setSelectedTemplate] = useState(null);
   const [templateVariables, setTemplateVariables] = useState({});
   const [isProfileOpen, setIsProfileOpen] = useState(false);
+  const [replyTarget, setReplyTarget] = useState(null);
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [attachments, setAttachments] = useState([]);
+  const [showAttachmentForm, setShowAttachmentForm] = useState(false);
+  const [attachmentUrl, setAttachmentUrl] = useState('');
+  const [attachmentType, setAttachmentType] = useState('image');
   const messagesEndRef = useRef(null);
+  const longPressTimerRef = useRef(null);
+  const messageRefs = useRef({});
+  const emojiPopoverRef = useRef(null);
   const chatHandle = useMemo(() => getChatHandle(chat), [chat]);
   const chatDisplayName = useMemo(() => getChatDisplayName(chat), [chat]);
   const chatAvatarUrl = useMemo(() => {
@@ -103,6 +172,65 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
     scrollToBottom();
   }, [chat?.messages]);
 
+  useEffect(() => {
+    setReplyTarget(null);
+    messageRefs.current = {};
+  }, [chat?.id]);
+
+  const handleMessageTouchStart = useCallback((message) => {
+    if (!isMobile) {
+      return;
+    }
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+    }
+    longPressTimerRef.current = setTimeout(() => {
+      setReplyTarget({
+        id: message.id,
+        author: getSenderLabel(message, chat),
+        snippet: getMessageSnippet(message) || '[attachment]',
+      });
+    }, 600);
+  }, [chat, isMobile]);
+
+  const cancelTouchTimer = useCallback(() => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  }, []);
+
+  const handleReplyClick = useCallback((event, message) => {
+    event?.stopPropagation();
+    setReplyTarget({
+      id: message.id,
+      author: getSenderLabel(message, chat),
+      snippet: getMessageSnippet(message) || '[attachment]',
+    });
+  }, [chat]);
+
+  const handleCancelReply = useCallback(() => {
+    setReplyTarget(null);
+  }, []);
+
+  const handleQuotedMessageJump = useCallback((messageId) => {
+    if (!messageId) return;
+    const node = messageRefs.current[messageId];
+    if (node) {
+      node.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      node.classList.add('message-highlight');
+      setTimeout(() => {
+        node.classList.remove('message-highlight');
+      }, 1200);
+    }
+  }, []);
+
+  const setMessageNodeRef = useCallback((id) => (element) => {
+    if (element) {
+      messageRefs.current[id] = element;
+    }
+  }, []);
+
   const orderedMessages = useMemo(() => {
     if (!chat?.messages) {
       return [];
@@ -110,41 +238,29 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
     const seenIds = new Set();
     return [...chat.messages]
       .filter((msg) => {
-        if (!msg?.id) {
-          return true;
-        }
-        if (seenIds.has(msg.id)) {
-          return false;
-        }
+        if (!msg?.id) return true;
+        if (seenIds.has(msg.id)) return false;
         seenIds.add(msg.id);
         return true;
       })
       .sort((a, b) => {
         const tsA = (() => {
           if (a?.timestamp) {
-            const value = new Date(a.timestamp).getTime();
-            if (!Number.isNaN(value)) {
-              return value;
-            }
+            const v = new Date(a.timestamp).getTime();
+            if (!Number.isNaN(v)) return v;
           }
-          if (typeof a?.ts === 'number') {
-            return a.ts * 1000;
-          }
+          if (typeof a?.ts === 'number') return a.ts * 1000;
           return 0;
         })();
         const tsB = (() => {
           if (b?.timestamp) {
-            const value = new Date(b.timestamp).getTime();
-            if (!Number.isNaN(value)) {
-              return value;
-            }
+            const v = new Date(b.timestamp).getTime();
+            if (!Number.isNaN(v)) return v;
           }
-          if (typeof b?.ts === 'number') {
-            return b.ts * 1000;
-          }
+          if (typeof b?.ts === 'number') return b.ts * 1000;
           return 0;
         })();
-        return tsA - tsB;
+        return tsA - tsB; // oldest -> newest
       });
   }, [chat?.messages]);
 
@@ -191,6 +307,23 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
       setIsProfileOpen(false);
     }
   }, [chat, isProfileOpen]);
+
+  useEffect(() => () => cancelTouchTimer(), [cancelTouchTimer]);
+
+  useEffect(() => {
+    const handleOutside = (event) => {
+      if (!showEmojiPicker) return;
+      if (emojiPopoverRef.current && !emojiPopoverRef.current.contains(event.target)) {
+        setShowEmojiPicker(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutside);
+    document.addEventListener('touchstart', handleOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleOutside);
+      document.removeEventListener('touchstart', handleOutside);
+    };
+  }, [showEmojiPicker]);
 
   const loadTemplates = async () => {
     try {
@@ -289,12 +422,19 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
     setIsSending(true);
     try {
       const token = localStorage.getItem('token');
+      const payload = {
+        chat_id: chat.id,
+        variables: templateVariables,
+      };
+      if (replyTarget?.id) {
+        payload.reply_to_message_id = replyTarget.id;
+        if (replyTarget.snippet) {
+          payload.reply_preview = replyTarget.snippet;
+        }
+      }
       await axios.post(
         `${API}/templates/${selectedTemplate.id}/send`,
-        {
-          chat_id: chat.id,
-          variables: templateVariables
-        },
+        payload,
         {
           headers: { Authorization: `Bearer ${token}` }
         }
@@ -303,6 +443,9 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
       setSelectedTemplate(null);
       setTemplateVariables({});
       setSearchQuery('');
+      if (replyTarget) {
+        setReplyTarget(null);
+      }
     } catch (error) {
       console.error('Error sending template:', error);
       const message = error.response?.data?.detail || 'Failed to send template';
@@ -320,14 +463,22 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
 
     setIsSending(true);
     try {
-      await sendMessage(chat.id, message);
+      await sendMessage(chat.id, message, {
+        replyTo: replyTarget ? { id: replyTarget.id, preview: replyTarget.snippet } : undefined,
+        attachments,
+      });
       setMessage('');
+      if (replyTarget) {
+        setReplyTarget(null);
+      }
+      setShowEmojiPicker(false);
+      setAttachments([]);
     } catch (error) {
       console.error('Error sending message:', error);
     } finally {
       setIsSending(false);
     }
-  }, [message, chat, sendMessage, isSending, canSendManualMessage]);
+  }, [message, chat, sendMessage, isSending, canSendManualMessage, replyTarget]);
 
   const handleProfileToggle = useCallback(() => {
     if (!chat) {
@@ -548,18 +699,21 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
                   originLabel = `Sent by ${sentByName}`;
                 }
                 const attachments = Array.isArray(msg.attachments) ? msg.attachments : [];
+                const templatePayload = extractTemplatePayload(attachments);
                 const hasStoryMention = attachments.some(
                   (attachment) => attachment && typeof attachment === 'object' && attachment.type === 'story_mention'
                 );
-                const hasAttachments = attachments.length > 0;
+                const hasAttachments = attachments.length > 0 && !templatePayload;
                 const placeholderText = (msg.content || '').trim().toLowerCase();
-                const hideText = hasAttachments && (placeholderText === '[attachment]' || placeholderText === '');
+                const hideText = (hasAttachments || templatePayload) && (placeholderText === '[attachment]' || placeholderText === '');
                 const displayText = hideText ? '' : msg.content;
                 const dayLabel = msg.timestamp ? formatMessageDay(msg.timestamp) : (msg.ts ? formatMessageDay(new Date(msg.ts * 1000).toISOString()) : '');
                 const showDayLabel = dayLabel && dayLabel !== lastRenderedDay;
                 if (showDayLabel) {
                   lastRenderedDay = dayLabel;
                 }
+                const replyMetadata = msg.metadata || {};
+                const hasReplyContext = Boolean(replyMetadata.reply_to);
 
                 const resolveAttachmentUrl = (attachment) => {
                   const source =
@@ -589,13 +743,13 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
                       data-testid={`message-${msg.id}`}
                     >
                       <div
-                        className={`max-w-[76%] rounded-2xl px-3 py-2.5 ${bubbleClasses}`}
+                        className={`max-w-[70%] rounded-2xl px-4 py-3 ${bubbleClasses}`}
                       >
                         {displayText && (
                           <p className="text-sm whitespace-pre-line break-words">{displayText}</p>
                         )}
                         {originLabel && (
-                          <p className="message-origin italic mt-1">
+                          <p className="text-[11px] text-purple-200/80 italic mt-1">
                             {originLabel}
                           </p>
                         )}
@@ -606,21 +760,36 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
                         )}
                         {attachments.length > 0 && (
                           <div className="mt-3 space-y-2">
-                            {attachments.map((attachment, index) => {
+                            {attachments.map((attachment, attachmentIndex) => {
                               const attachmentUrl = resolveAttachmentUrl(attachment);
+                              if (attachment.type === 'image' && attachmentUrl) {
+                                return (
+                                  <img
+                                    key={`${msg.id || 'msg'}-attachment-${attachmentIndex}`}
+                                    src={attachmentUrl}
+                                    alt={`attachment-${attachmentIndex + 1}`}
+                                    className="max-h-64 w-full rounded-xl object-cover border border-white/10"
+                                  />
+                                );
+                              }
                               if (!attachmentUrl) return null;
-
                               return (
-                                <div key={`${msg.id || 'msg'}-attachment-${index}`}>
-                                  <AttachmentPreview url={attachmentUrl} />
-                                </div>
+                                <a
+                                  key={`${msg.id || 'msg'}-attachment-${attachmentIndex}`}
+                                  href={attachmentUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="block text-xs text-purple-200 underline break-all"
+                                >
+                                  View attachment
+                                </a>
                               );
                             })}
                           </div>
                         )}
                         <p
-                          className={`message-timestamp mt-2 ${
-                            isAgentMessage ? 'message-timestamp--agent' : ''
+                          className={`text-[11px] mt-2 ${
+                            isAgentMessage ? 'text-purple-200' : 'text-gray-500'
                           }`}
                         >
                           {formatMessageFullDateTime(msg.timestamp || (msg.ts ? new Date(msg.ts * 1000).toISOString() : null))}
@@ -640,6 +809,40 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
           {!canSendManualMessage && (
             <div className="mb-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
               The 24-hour human agent window has expired. Send an approved template or wait for the user to reply.
+            </div>
+          )}
+          {attachments.length > 0 && (
+            <div className="flex flex-wrap gap-2 mb-2">
+              {attachments.map((att, idx) => (
+                <span key={`${att.payload?.url || idx}-${idx}`} className="attachment-chip">
+                  {att.type}: {att.payload?.url || att.url}
+                  <button
+                    type="button"
+                    className="attachment-chip-remove"
+                    onClick={() =>
+                      setAttachments((prev) => prev.filter((_, i) => i !== idx))
+                    }
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+          {replyTarget && (
+            <div className="reply-preview">
+              <div className="reply-preview-body">
+                <p className="reply-preview-author">{replyTarget.author}</p>
+                <p className="reply-preview-text">{replyTarget.snippet}</p>
+              </div>
+              <button
+                type="button"
+                className="reply-preview-cancel"
+                onClick={handleCancelReply}
+                aria-label="Cancel reply"
+              >
+                <X className="w-3 h-3" />
+              </button>
             </div>
           )}
           <form onSubmit={handleSend} className="space-y-1">
@@ -665,6 +868,45 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
             />
             <div className="flex flex-wrap items-center justify-between gap-1.5">
               <div className="composer-toolbar">
+                <div className="relative inline-block" ref={emojiPopoverRef}>
+                  <Button
+                    type="button"
+                    onClick={() => setShowEmojiPicker((prev) => !prev)}
+                    variant="ghost"
+                    className={isMobile ? 'min-w-[36px] min-h-[36px]' : 'h-9 px-3'}
+                    title="Insert emoji"
+                  >
+                    <Smile className="w-4 h-4" />
+                    <span className="hidden sm:inline text-sm">Emoji</span>
+                  </Button>
+                  {showEmojiPicker && (
+                    <div className="emoji-popover">
+                      {['😀','😃','😄','😁','😆','😅','😂','🙂','😉','😊','😍','😘','😎','🤩','🤔','🤝','👍','🙏','🔥','🎉','❤️','🚀','🌟','😴','🤖','🥳','🤝','📌','✅','❓','☕'].map((emoji) => (
+                        <button
+                          key={emoji}
+                          type="button"
+                          className="emoji-btn"
+                          onClick={() => {
+                            setMessage((prev) => `${prev}${emoji}`);
+                            setShowEmojiPicker(false);
+                          }}
+                        >
+                          {emoji}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <Button
+                  type="button"
+                  onClick={() => setShowAttachmentForm((prev) => !prev)}
+                  variant="ghost"
+                  className={isMobile ? 'min-w-[36px] min-h-[36px]' : 'h-9 px-3'}
+                  title="Add attachment (URL)"
+                >
+                  <Paperclip className="w-4 h-4" />
+                  <span className="hidden sm:inline text-sm">Attach</span>
+                </Button>
                 <Button
                   type="button"
                   onClick={() => setShowTemplateDialog(true)}
@@ -827,18 +1069,73 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm">
           <div className="absolute inset-0" onClick={handleCloseProfile} role="presentation" />
           <div className="absolute inset-x-3 bottom-3 top-12 overflow-y-auto">
-            <ChatProfilePanel
-              chat={chat}
-              onClose={handleCloseProfile}
-              isMobile
-              canSendManualMessage={canSendManualMessage}
-              chatDisplayName={chatDisplayName}
-              chatHandle={chatHandle}
+          <ChatProfilePanel
+            chat={chat}
+            orderedMessages={orderedMessages}
+            onClose={handleCloseProfile}
+            isMobile
+            canSendManualMessage={canSendManualMessage}
+            chatDisplayName={chatDisplayName}
+            chatHandle={chatHandle}
               chatAvatarUrl={chatAvatarUrl}
               lastActivityLabel={lastActivityLabel}
             />
-          </div>
-        </div>
+                </div>
+                {showAttachmentForm && (
+                  <div className="attachment-form">
+                    <div className="flex flex-col gap-2">
+                      <label className="text-xs text-[var(--tg-text-secondary)]">Attachment URL</label>
+                      <Input
+                        value={attachmentUrl}
+                        onChange={(e) => setAttachmentUrl(e.target.value)}
+                        placeholder="https://example.com/image.jpg"
+                        className="bg-[var(--tg-surface-muted)] border-[var(--tg-border-soft)]"
+                      />
+                      <label className="text-xs text-[var(--tg-text-secondary)]">Type</label>
+                      <select
+                        value={attachmentType}
+                        onChange={(e) => setAttachmentType(e.target.value)}
+                        className="h-10 rounded-md bg-[var(--tg-surface-muted)] border border-[var(--tg-border-soft)] px-2 text-sm"
+                      >
+                        <option value="image">Image</option>
+                        <option value="video">Video</option>
+                        <option value="file">File</option>
+                      </select>
+                      <div className="flex gap-2">
+                        <Button
+                          type="button"
+                          size="sm"
+                          onClick={() => {
+                            if (!attachmentUrl.trim()) return;
+                            setAttachments((prev) => [
+                              ...prev,
+                              {
+                                type: attachmentType,
+                                payload: { url: attachmentUrl.trim() }
+                              }
+                            ]);
+                            setAttachmentUrl('');
+                            setShowAttachmentForm(false);
+                          }}
+                        >
+                          Add
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => {
+                            setAttachmentUrl('');
+                            setShowAttachmentForm(false);
+                          }}
+                        >
+                          Cancel
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
       )}
       {!isMobile && !isTablet && (
         <aside
@@ -849,6 +1146,7 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
         >
           <ChatProfilePanel
             chat={chat}
+            orderedMessages={orderedMessages}
             onClose={handleCloseProfile}
             isMobile={false}
             canSendManualMessage={canSendManualMessage}
@@ -865,6 +1163,7 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
 
 const ChatProfilePanel = ({
   chat,
+  orderedMessages = [],
   onClose,
   isMobile,
   canSendManualMessage,
@@ -874,9 +1173,8 @@ const ChatProfilePanel = ({
   lastActivityLabel,
 }) => {
   const assignedAgent = chat.assigned_agent;
-  const messageCount = chat.messages?.length ?? 0;
-  const lastMessage =
-    chat.messages && chat.messages.length > 0 ? chat.messages[chat.messages.length - 1] : null;
+  const messageCount = orderedMessages.length;
+  const lastMessage = messageCount > 0 ? orderedMessages[messageCount - 1] : null;
 
   const displayName = chatDisplayName || getChatDisplayName(chat);
   const handle = chatHandle || getChatHandle(chat);

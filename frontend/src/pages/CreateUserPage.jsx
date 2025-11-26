@@ -13,6 +13,9 @@ import { buildNavigationItems } from '../utils/navigationConfig';
 const DEFAULT_FORM = {
   name: '',
   email: '',
+  contactNumber: '',
+  country: '',
+  empId: '',
   password: 'TempPass1',
   role: 'agent',
   positionId: ''
@@ -101,8 +104,16 @@ const CreateUserPage = ({ user, onLogout }) => {
     if (!canInviteUsers) {
       return;
     }
-    if (!form.name.trim() || !form.email.trim()) {
-      setStatus({ type: 'error', message: 'Name and email are required.' });
+    if (!form.name.trim()) {
+      setStatus({ type: 'error', message: 'Name is required.' });
+      return;
+    }
+    if (!form.email.trim() && !form.contactNumber.trim()) {
+      setStatus({ type: 'error', message: 'Provide at least an email or a contact number.' });
+      return;
+    }
+    if (!form.empId.trim()) {
+      setStatus({ type: 'error', message: 'Employee ID is required.' });
       return;
     }
     if (form.password.length < 8) {
@@ -116,11 +127,18 @@ const CreateUserPage = ({ user, onLogout }) => {
       if (!token) {
         throw new Error('Missing auth token');
       }
+      const email = form.email.trim();
+      const contactNumber = form.contactNumber.trim();
+      const country = form.country.trim();
+      const empId = form.empId.trim();
       await axios.post(
         `${API}/admin/users`,
         {
           name: form.name.trim(),
-          email: form.email.trim(),
+          email: email || null,
+          contact_number: contactNumber || null,
+          country: country || null,
+          emp_id: empId,
           password: form.password,
           role: form.role,
           position_id: form.positionId || null
@@ -209,7 +227,7 @@ const CreateUserPage = ({ user, onLogout }) => {
               </div>
               <div>
                 <Label htmlFor="email" className="text-sm text-[var(--tg-text-secondary)]">
-                  Email
+                  Email (optional if contact number provided)
                 </Label>
                 <Input
                   id="email"
@@ -217,7 +235,34 @@ const CreateUserPage = ({ user, onLogout }) => {
                   value={form.email}
                   onChange={handleInputChange('email')}
                   placeholder="agent@ticklegram.com"
-                  required
+                />
+              </div>
+            </div>
+
+            <div className="grid md:grid-cols-2 gap-4">
+              <div>
+                <Label htmlFor="contactNumber" className="text-sm text-[var(--tg-text-secondary)]">
+                  Contact number
+                </Label>
+                <Input
+                  id="contactNumber"
+                  value={form.contactNumber}
+                  onChange={handleInputChange('contactNumber')}
+                  placeholder="+1 415 555 0100"
+                />
+                <p className="mt-1 text-xs text-[var(--tg-text-muted)]">
+                  Required only if email is not provided.
+                </p>
+              </div>
+              <div>
+                <Label htmlFor="country" className="text-sm text-[var(--tg-text-secondary)]">
+                  Country
+                </Label>
+                <Input
+                  id="country"
+                  value={form.country}
+                  onChange={handleInputChange('country')}
+                  placeholder="United States"
                 />
               </div>
             </div>
@@ -246,11 +291,29 @@ const CreateUserPage = ({ user, onLogout }) => {
                   type="text"
                   value={form.password}
                   onChange={handleInputChange('password')}
-                  minLength={4}
+                  minLength={8}
                   required
                 />
                 <p className="mt-1 text-xs text-[var(--tg-text-muted)]">
-                  Prefilled with <code>1234</code>. Update before sending to the user.
+                  Prefilled with <code>TempPass1</code>. Update before sending to the user.
+                </p>
+              </div>
+            </div>
+
+            <div className="grid md:grid-cols-2 gap-4">
+              <div>
+                <Label htmlFor="empId" className="text-sm text-[var(--tg-text-secondary)]">
+                  Employee ID
+                </Label>
+                <Input
+                  id="empId"
+                  value={form.empId}
+                  onChange={handleInputChange('empId')}
+                  placeholder="EMP-00123"
+                  required
+                />
+                <p className="mt-1 text-xs text-[var(--tg-text-muted)]">
+                  Used for directory search and employee record keeping.
                 </p>
               </div>
             </div>

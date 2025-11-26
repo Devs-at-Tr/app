@@ -7,6 +7,17 @@ import { API } from '../App';
 import UserRosterCard from '../components/UserRosterCard';
 import { hasPermission, hasAnyPermission } from '../utils/permissionUtils';
 import { buildNavigationItems } from '../utils/navigationConfig';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle
+} from '../components/ui/alert-dialog';
+import { Input } from '../components/ui/input';
 
 const UserDirectoryPage = ({ user, onLogout }) => {
   const [users, setUsers] = useState([]);
@@ -14,6 +25,14 @@ const UserDirectoryPage = ({ user, onLogout }) => {
   const [positions, setPositions] = useState([]);
   const [positionsLoading, setPositionsLoading] = useState(false);
   const [error, setError] = useState('');
+  const [resetModal, setResetModal] = useState({
+    open: false,
+    userId: null,
+    userName: '',
+    newPassword: '',
+    confirmPassword: '',
+    submitting: false
+  });
   const navigate = useNavigate();
 
   const canManageTemplates = useMemo(() => hasPermission(user, 'template:manage'), [user]);
@@ -147,6 +166,52 @@ const UserDirectoryPage = ({ user, onLogout }) => {
     [canAssignPositions, loadUserRoster]
   );
 
+  const openResetModal = useCallback((user) => {
+    setResetModal({
+      open: true,
+      userId: user.id,
+      userName: user.name || 'User',
+      newPassword: '',
+      confirmPassword: '',
+      submitting: false
+    });
+  }, []);
+
+  const closeResetModal = () => {
+    setResetModal((prev) => ({ ...prev, open: false, newPassword: '', confirmPassword: '', submitting: false }));
+  };
+
+  const handleResetPassword = useCallback(async () => {
+    if (!resetModal.userId) return;
+    if (!resetModal.newPassword || resetModal.newPassword.length < 8) {
+      setError('Password must be at least 8 characters.');
+      return;
+    }
+    if (resetModal.newPassword !== resetModal.confirmPassword) {
+      setError('Passwords do not match.');
+      return;
+    }
+    setResetModal((prev) => ({ ...prev, submitting: true }));
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        throw new Error('No authentication token found');
+      }
+      await axios.post(
+        `${API}/admin/users/${resetModal.userId}/reset-password`,
+        { new_password: resetModal.newPassword },
+        { headers: { Authorization: `Bearer ${token}` }, timeout: 20000 }
+      );
+      setError('');
+      closeResetModal();
+      await loadUserRoster();
+    } catch (resetError) {
+      console.error('Error resetting password:', resetError);
+      setError(resetError.response?.data?.detail || resetError.message || 'Unable to reset password');
+      setResetModal((prev) => ({ ...prev, submitting: false }));
+    }
+  }, [loadUserRoster, resetModal]);
+
   return (
     <AppShell user={user} onLogout={onLogout} navItems={navigationItems}>
       <AdminLayout
@@ -154,6 +219,53 @@ const UserDirectoryPage = ({ user, onLogout }) => {
         description="Monitor your team, spot workload spikes, and jump into assignments."
       >
         <div className="flex-1 overflow-y-auto space-y-4">
+          <AlertDialog open={resetModal.open} onOpenChange={(open) => !open && closeResetModal()}>
+            <AlertDialogContent className="bg-[var(--tg-surface)] border border-[var(--tg-border-soft)] text-[var(--tg-text-primary)]">
+              <AlertDialogHeader>
+                <AlertDialogTitle>Reset password</AlertDialogTitle>
+                <AlertDialogDescription className="text-[var(--tg-text-muted)]">
+                  Set a new password for <strong>{resetModal.userName}</strong>. This action takes effect immediately.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <div className="space-y-3">
+                <div className="space-y-1">
+                  <label className="text-xs text-[var(--tg-text-secondary)]">New password</label>
+                  <Input
+                    type="password"
+                    value={resetModal.newPassword}
+                    onChange={(e) => setResetModal((prev) => ({ ...prev, newPassword: e.target.value }))}
+                    placeholder="At least 8 characters"
+                    autoComplete="new-password"
+                    minLength={8}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-[var(--tg-text-secondary)]">Confirm new password</label>
+                  <Input
+                    type="password"
+                    value={resetModal.confirmPassword}
+                    onChange={(e) => setResetModal((prev) => ({ ...prev, confirmPassword: e.target.value }))}
+                    placeholder="Repeat password"
+                    autoComplete="new-password"
+                    minLength={8}
+                  />
+                </div>
+              </div>
+              <AlertDialogFooter>
+                <AlertDialogCancel className="bg-transparent border border-[var(--tg-border-soft)] text-[var(--tg-text-primary)]">
+                  Cancel
+                </AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={handleResetPassword}
+                  disabled={resetModal.submitting}
+                  className="bg-gradient-to-r from-purple-500 via-pink-500 to-orange-400 text-white"
+                >
+                  {resetModal.submitting ? 'Setting...' : 'Set password'}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+
           {error && (
             <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
               {error}
@@ -172,6 +284,8 @@ const UserDirectoryPage = ({ user, onLogout }) => {
               onAssignPosition={handleAssignPosition}
               onToggleActive={handleToggleActive}
               canToggleActive={canManagePositions}
+              canResetPasswords={user?.role === 'admin'}
+              onResetPassword={openResetModal}
             />
           ) : (
             <div className="rounded-xl border border-[var(--tg-border-soft)] bg-[var(--tg-surface)] p-6 text-sm text-[var(--tg-text-secondary)]">

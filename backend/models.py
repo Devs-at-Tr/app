@@ -82,7 +82,10 @@ class User(Base):
     
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     name = Column(String(255), nullable=False)
-    email = Column(String(255), unique=True, nullable=False, index=True)
+    email = Column(String(255), unique=True, nullable=True, index=True)
+    contact_number = Column(String(50), unique=True, nullable=True, index=True)
+    country = Column(String(100), nullable=True)
+    emp_id = Column(String(100), unique=True, nullable=True, index=True)
     password_hash = Column(String(255), nullable=False)
     role = Column(SQLEnum(UserRole), nullable=False, default=UserRole.AGENT)
     position_id = Column(String(36), ForeignKey("positions.id"), nullable=True, index=True)

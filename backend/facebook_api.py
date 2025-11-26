@@ -181,7 +181,8 @@ class FacebookMessengerClient:
         self,
         page_access_token: str,
         recipient_id: str,
-        text: str
+        text: str,
+        reply_to_mid: Optional[str] = None
     ) -> Dict[str, Any]:
         """Send a text message to a user"""
         
@@ -203,6 +204,8 @@ class FacebookMessengerClient:
             "message": {"text": text},
             "access_token": page_access_token
         }
+        if reply_to_mid:
+            payload["message"]["reply_to"] = {"mid": reply_to_mid}
         
         try:
             response = await self.client.post(url, json=payload)
@@ -467,7 +470,8 @@ class FacebookMessengerClient:
         recipient_id: str,
         text: str,
         template_id: Optional[str] = None,
-        tag: str = "ACCOUNT_UPDATE"
+        tag: str = "ACCOUNT_UPDATE",
+        reply_to_mid: Optional[str] = None
     ) -> Dict[str, Any]:
         """Send a tagged/template message outside the standard 24-hour window"""
 
@@ -493,6 +497,8 @@ class FacebookMessengerClient:
             message_payload["message_creative_id"] = template_id
         else:
             message_payload["text"] = text
+        if reply_to_mid:
+            message_payload["reply_to"] = {"mid": reply_to_mid}
 
         payload = {
             "recipient": {"id": recipient_id},

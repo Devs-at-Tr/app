@@ -50,6 +50,8 @@ const UserRosterCard = ({
   onAssignPosition,
   onToggleActive,
   canToggleActive = false,
+  canResetPasswords = false,
+  onResetPassword,
 }) => {
   const [search, setSearch] = useState('');
 
@@ -110,6 +112,7 @@ const UserRosterCard = ({
             value={search}
             onChange={(event) => setSearch(event.target.value)}
             placeholder="Search name, email, or position"
+            autoComplete="off"
             className="pl-10 bg-[var(--tg-surface-muted)] border-[var(--tg-border-soft)] text-sm text-[var(--tg-text-primary)] placeholder:text-[var(--tg-text-muted)]"
           />
         </div>
@@ -130,7 +133,10 @@ const UserRosterCard = ({
                 >
                   <div className="flex-1 min-w-0">
                     <p className="font-semibold text-[var(--tg-text-primary)] truncate">{user.name}</p>
-                    <p className="text-xs text-[var(--tg-text-muted)] truncate">{user.email || '—'}</p>
+                    <p className="text-xs text-[var(--tg-text-muted)] truncate">
+                      {user.email || '—'}
+                      {user.contact_number ? ` · ${user.contact_number}` : ''}
+                    </p>
                   </div>
                   <div className="flex items-center gap-3">
                     <RolePill label={user.position?.name || user.role} />
@@ -164,6 +170,16 @@ const UserRosterCard = ({
                         />
                       </div>
                     )}
+                    {canResetPasswords && (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => onResetPassword?.(user)}
+                        className="text-xs"
+                      >
+                        Reset password
+                      </Button>
+                    )}
                     <AssignedCount count={user.assigned_chat_count || 0} />
                   </div>
                 </div>
@@ -179,7 +195,10 @@ const UserRosterCard = ({
                   >
                     <div className="flex-1 min-w-0">
                       <p className="font-semibold text-[var(--tg-text-primary)] truncate">{user.name}</p>
-                      <p className="text-xs text-[var(--tg-text-muted)] truncate">{user.email || '-'}</p>
+                      <p className="text-xs text-[var(--tg-text-muted)] truncate">
+                        {user.email || '—'}
+                        {user.contact_number ? ` · ${user.contact_number}` : ''}
+                      </p>
                     </div>
                     {canToggleActive && (
                       <Button
@@ -189,6 +208,16 @@ const UserRosterCard = ({
                         className="text-xs"
                       >
                         Activate
+                      </Button>
+                    )}
+                    {canResetPasswords && (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => onResetPassword?.(user)}
+                        className="text-xs"
+                      >
+                        Reset password
                       </Button>
                     )}
                   </div>

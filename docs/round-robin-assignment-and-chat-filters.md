@@ -114,3 +114,11 @@ Docs:
 
 These updates keep all existing messaging flows intact while layering in richer workload management and responsive UI behaviors. Let the Inbox load once after deployment so the new cursor record is created automatically.
 
+## 2025-11-26 Update: Inactive Agents & Super Admin Safeguards
+
+- **Auto-redistribute chats from inactive agents**: A background worker (`INACTIVE_AGENT_REASSIGN_INTERVAL`, default 60s) reassigns chats owned by inactive agents to active agents via the existing round-robin cursor. Immediate redistribution also runs when an agent is toggled inactive.
+- **Protect super admin availability**: Deactivation API now blocks (a) a super admin from deactivating themselves and (b) deactivating the last active super admin. Errors are returned with clear messages.
+- **Where it lives**:
+  - Backend logic: `routes/chat_helpers.py` (`reassign_chats_from_inactive_agents`), `routes/users.py` (deactivation guards + trigger), `server.py` (startup task).
+  - No schema changes required; uses existing `is_active` flag and assignment cursor.
+

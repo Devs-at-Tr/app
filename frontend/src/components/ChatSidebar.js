@@ -93,10 +93,33 @@ const ChatSidebar = ({
     </div>
   );
 
+  const getLastConversationTimestamp = (chat) => {
+    const parseTimestamp = (value) => {
+      if (!value) return null;
+      const time = new Date(value).getTime();
+      return Number.isNaN(time) ? null : time;
+    };
+    const candidates = [
+      chat?.last_message_timestamp,
+      chat?.last_incoming_at,
+      chat?.last_outgoing_at,
+      chat?.created_at,
+    ]
+      .map(parseTimestamp)
+      .filter((value) => value !== null);
+    if (!candidates.length) {
+      return null;
+    }
+    return new Date(Math.max(...candidates)).toISOString();
+  };
+
   const getLastActivityLabel = (chat) => {
-    const timestamp = chat?.last_message_timestamp || chat?.updated_at || chat?.created_at;
-    if (!timestamp) return '';
-    return formatMessageTime(timestamp) || formatMessageDate(timestamp);
+    const conversationTimestamp = getLastConversationTimestamp(chat);
+    if (!conversationTimestamp) return '';
+    return (
+      formatMessageTime(conversationTimestamp) ||
+      formatMessageDate(conversationTimestamp)
+    );
   };
 
   const handleSearchChange = (value) => {

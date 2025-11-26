@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useCallback } from 'react';
-import { NavLink } from 'react-router-dom';
+import { NavLink, useNavigate } from 'react-router-dom';
 import { Menu, LogOut, Moon, Sun, ChevronDown } from 'lucide-react';
 import { Sheet, SheetContent } from '../components/ui/sheet';
 import { Button } from '../components/ui/button';
@@ -46,6 +46,7 @@ const AppShell = ({ user, navItems = [], onLogout, children, sidebarExtras = nul
   const [isSidebarExpanded, setSidebarExpanded] = useState(false);
   const [showInstagramManager, setShowInstagramManager] = useState(false);
   const [showFacebookManager, setShowFacebookManager] = useState(false);
+  const navigate = useNavigate();
 
   const roleLabel = useMemo(() => {
     if (user?.position?.name) {
@@ -88,7 +89,7 @@ const AppShell = ({ user, navItems = [], onLogout, children, sidebarExtras = nul
           alt={user?.name}
           className={cn(
             sizeClass,
-            'rounded-full object-cover border border-[var(--tg-border-soft)]'
+            'rounded-full object-cover border border-[var(--tg-border-soft)] shadow-[0_10px_25px_rgba(0,0,0,0.25)]'
           )}
         />
       );
@@ -97,7 +98,7 @@ const AppShell = ({ user, navItems = [], onLogout, children, sidebarExtras = nul
       <div
         className={cn(
           sizeClass,
-          'rounded-full bg-[var(--tg-accent-strong)] text-white flex items-center justify-center text-sm font-semibold'
+          'rounded-full bg-gradient-to-br from-purple-500 via-pink-500 to-orange-400 text-white flex items-center justify-center text-sm font-semibold shadow-[0_10px_25px_rgba(0,0,0,0.25)]'
         )}
       >
         {initials}
@@ -284,20 +285,38 @@ const AppShell = ({ user, navItems = [], onLogout, children, sidebarExtras = nul
         </Button>
         {expanded ? (
           <div className="flex items-center gap-3 rounded-2xl bg-[var(--tg-surface-muted)] border border-[var(--tg-border-soft)] p-3">
-            {renderAvatar()}
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-semibold truncate">{user?.name}</p>
-              <p className="text-xs text-[var(--tg-text-muted)] truncate">{roleLabel}</p>
-            </div>
+            <button
+              type="button"
+              onClick={() => navigate('/profile')}
+              className="flex items-center gap-3 flex-1 min-w-0 text-left"
+            >
+              {renderAvatar()}
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-semibold truncate">{user?.name}</p>
+                <p className="text-xs text-[var(--tg-text-muted)] truncate">{roleLabel}</p>
+              </div>
+            </button>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => navigate('/profile')}
+              className="text-xs px-3 bg-gradient-to-r from-purple-500 via-pink-500 to-orange-400 text-white"
+            >
+              Profile
+            </Button>
             {renderLogoutButton({
               className: 'text-[var(--tg-accent-strong)] hover:text-[var(--tg-accent-strong)]/80',
               showLabel: true
             })}
           </div>
         ) : (
-          <div className="flex items-center justify-center rounded-2xl bg-[var(--tg-surface-muted)] border border-[var(--tg-border-soft)] p-3">
+          <button
+            type="button"
+            onClick={() => navigate('/profile')}
+            className="flex items-center justify-center rounded-2xl bg-[var(--tg-surface-muted)] border border-[var(--tg-border-soft)] p-3 hover:border-[var(--tg-accent-soft)] transition"
+          >
             {renderAvatar('w-12 h-12')}
-          </div>
+          </button>
         )}
       </div>
     </div>

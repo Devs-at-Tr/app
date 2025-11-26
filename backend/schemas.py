@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, Field, model_validator
+from pydantic import BaseModel, EmailStr, Field, model_validator, field_validator
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
 import pytz
@@ -20,6 +20,13 @@ def convert_to_ist(dt: datetime) -> datetime:
         dt = dt.replace(tzinfo=timezone.utc)
     ist = pytz.timezone('Asia/Kolkata')
     return dt.astimezone(ist)
+
+def normalize_contact_number(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    cleaned = "".join(ch for ch in value if ch.isdigit() or ch == "+")
+    cleaned = cleaned.strip()
+    return cleaned or None
 
 # Position Schemas
 class PositionBase(BaseModel):
@@ -58,13 +65,42 @@ class PositionResponse(BaseModel):
 class UserRegister(BaseModel):
     name: str
     email: EmailStr
+    contact_number: Optional[str] = None
+    country: Optional[str] = None
+    emp_id: Optional[str] = None
     password: str
     role: Optional[UserRole] = UserRole.AGENT
     position_id: Optional[str] = None
 
+    @field_validator("contact_number")
+    @classmethod
+    def _normalize_contact(cls, value: Optional[str]) -> Optional[str]:
+        return normalize_contact_number(value)
+
+    @field_validator("country")
+    @classmethod
+    def _normalize_country(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        value = value.strip()
+        return value or None
+
 class UserLogin(BaseModel):
-    email: EmailStr
+    identifier: Optional[str] = None
+    email: Optional[str] = None
     password: str
+
+    @model_validator(mode="after")
+    def _ensure_identifier(self):
+        ident = (self.identifier or "").strip()
+        email = (self.email or "").strip()
+        if ident:
+            self.identifier = ident
+            return self
+        if email:
+            self.identifier = email
+            return self
+        raise ValueError("identifier or email is required")
 
 
 class ForgotPasswordRequest(BaseModel):
@@ -78,20 +114,67 @@ class ResetPasswordRequest(BaseModel):
 
 class AdminUserCreate(BaseModel):
     name: str
-    email: EmailStr
+    email: Optional[EmailStr] = None
+    contact_number: Optional[str] = None
+    country: Optional[str] = None
+    emp_id: Optional[str] = None
     password: str = Field(min_length=8)
     role: UserRole = UserRole.AGENT
     position_id: Optional[str] = None
+
+    @field_validator("contact_number")
+    @classmethod
+    def _normalize_contact(cls, value: Optional[str]) -> Optional[str]:
+        return normalize_contact_number(value)
+
+    @field_validator("country")
+    @classmethod
+    def _normalize_country(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        value = value.strip()
+        return value or None
 
 
 class AuthConfigResponse(BaseModel):
     allow_public_signup: bool
     forgot_password_enabled: bool = True
 
+
+class AdminUserPasswordReset(BaseModel):
+    new_password: str = Field(min_length=8)
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(min_length=1)
+    new_password: str = Field(min_length=8)
+
+
+class UserProfileUpdate(BaseModel):
+    name: Optional[str] = None
+    email: Optional[EmailStr] = None
+    contact_number: Optional[str] = None
+
+    @field_validator("contact_number")
+    @classmethod
+    def _normalize_contact(cls, value: Optional[str]) -> Optional[str]:
+        return normalize_contact_number(value)
+
+    @field_validator("name")
+    @classmethod
+    def _strip_name(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        cleaned = value.strip()
+        return cleaned or None
+
 class UserResponse(BaseModel):
     id: str
     name: str
-    email: str
+    email: Optional[str] = None
+    contact_number: Optional[str] = None
+    country: Optional[str] = None
+    emp_id: Optional[str] = None
     role: UserRole
     is_active: bool = True
     position: Optional[PositionResponse] = None
@@ -241,6 +324,9 @@ class InstagramAccountResponse(BaseModel):
 class MessageCreate(BaseModel):
     content: str
     message_type: Optional[MessageType] = MessageType.TEXT
+    reply_to_message_id: Optional[str] = None
+    reply_preview: Optional[str] = None
+    attachments: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
 
 class MessageResponse(BaseModel):
     id: str
@@ -254,6 +340,7 @@ class MessageResponse(BaseModel):
     attachments: List[Dict[str, Any]] = Field(default_factory=list)
     attachments_json: Optional[str] = Field(default=None, exclude=True)
     metadata_json: Optional[str] = Field(default=None, exclude=True)
+    metadata: Optional[Dict[str, Any]] = None
     is_gif: Optional[bool] = Field(default=False, exclude=True)
     sent_by: Optional[Dict[str, Any]] = None
     
@@ -269,14 +356,37 @@ class MessageResponse(BaseModel):
                     self.attachments = json.loads(raw)
                 except (TypeError, ValueError):
                     self.attachments = []
-            else:
-                self.attachments = []
-        if self.metadata_json and not self.sent_by:
+        if not self.metadata and self.metadata_json:
             try:
-                metadata = json.loads(self.metadata_json)
-                self.sent_by = metadata.get("sent_by")
+                self.metadata = json.loads(self.metadata_json)
             except (TypeError, ValueError):
-                self.sent_by = None
+                self.metadata = None
+
+    @field_validator("metadata", mode="before")
+    @classmethod
+    def _coerce_metadata(cls, value):
+        if value is None:
+            return None
+        try:
+            from sqlalchemy.sql.schema import MetaData as SAMetaData
+        except Exception:
+            SAMetaData = None
+        if SAMetaData and isinstance(value, SAMetaData):
+            return None
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except (TypeError, ValueError):
+                return None
+        return value
+        #     else:
+        #         self.attachments = []
+        # if self.metadata_json and not self.sent_by:
+        #     try:
+        #         metadata = json.loads(self.metadata_json)
+        #         self.sent_by = metadata.get("sent_by")
+        #     except (TypeError, ValueError):
+        #         self.sent_by = None
 
 class InstagramUserSchema(BaseModel):
     igsid: str
@@ -557,4 +667,6 @@ class MessageTemplateResponse(BaseModel):
 
 class TemplateSendRequest(BaseModel):
     chat_id: str
-    variables: Optional[dict] = {}  # For variable substitution like {name}, {order_id}
+    variables: Optional[dict] = Field(default_factory=dict)
+    reply_to_message_id: Optional[str] = None
+    reply_preview: Optional[str] = None

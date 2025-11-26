@@ -9,7 +9,8 @@ import {
   Shield,
   UserPlus,
   Activity,
-  Plug
+  Plug,
+  User
 } from 'lucide-react';
 
 export const buildNavigationItems = ({
@@ -44,6 +45,8 @@ export const buildNavigationItems = ({
   if (canManageTemplates) {
     items.push({ id: 'templates', label: 'Templates', icon: FileText, to: '/templates' });
   }
+
+  // items.push({ id: 'profile', label: 'My Profile', icon: User, to: '/profile' }); //profile page disabled
 
   if (canViewStats) {
     items.push({ id: 'stats', label: 'Analytics', icon: Activity, to: '/stats' });

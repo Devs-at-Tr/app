@@ -23,6 +23,9 @@ from schemas import (
     UserLogin,
     UserRegister,
     UserResponse,
+    normalize_contact_number,
+    ChangePasswordRequest,
+    UserProfileUpdate,
 )
 from settings import (
     ALLOW_PUBLIC_SIGNUP,
@@ -34,6 +37,7 @@ from settings import (
 )
 from utils.mailer import send_email
 from utils.timezone import utc_now
+from routes.dependencies import get_current_user
 
 router = APIRouter()
 
@@ -116,16 +120,57 @@ def _send_password_reset_email(email: str, name: Optional[str], reset_url: str) 
             "Password reset email not sent (check SMTP config). Recipient=%s", email
         )
 
+def _find_user_by_identifier(db: Session, identifier: str) -> Optional[User]:
+    trimmed = identifier.strip()
+    normalized_email = normalize_email(trimmed)
+    normalized_contact = normalize_contact_number(trimmed)
+
+    if "@" in trimmed and normalized_email:
+        user = db.query(User).filter(func.lower(User.email) == normalized_email).first()
+        if user:
+            return user
+
+    if normalized_contact:
+        user = db.query(User).filter(User.contact_number == normalized_contact).first()
+        if user:
+            return user
+
+    if normalized_email:
+        return db.query(User).filter(func.lower(User.email) == normalized_email).first()
+    return None
+
 
 @router.post("/auth/register", response_model=UserResponse)
 def register(user_data: UserRegister, db: Session = Depends(get_db)):
-    existing_user = db.query(User).filter(User.email == user_data.email).first()
+    normalized_email = normalize_email(user_data.email)
+    contact_number = normalize_contact_number(user_data.contact_number)
+    emp_id = user_data.emp_id.strip() if user_data.emp_id else None
+    existing_user = db.query(User).filter(func.lower(User.email) == normalized_email).first()
     if existing_user:
         raise HTTPException(status_code=400, detail="Email already registered")
+    if contact_number:
+        existing_contact = (
+            db.query(User)
+            .filter(User.contact_number == contact_number)
+            .first()
+        )
+        if existing_contact:
+            raise HTTPException(status_code=400, detail="Contact number already registered")
+    if emp_id:
+        existing_emp = (
+            db.query(User)
+            .filter(func.lower(User.emp_id) == emp_id.lower())
+            .first()
+        )
+        if existing_emp:
+            raise HTTPException(status_code=400, detail="Employee ID already registered")
 
     new_user = User(
         name=user_data.name,
-        email=user_data.email,
+        email=normalized_email,
+        contact_number=contact_number,
+        country=user_data.country,
+        emp_id=emp_id,
         password_hash=get_password_hash(user_data.password),
         role=user_data.role,
     )
@@ -147,14 +192,35 @@ def signup(
     if not ALLOW_PUBLIC_SIGNUP:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Public signup is disabled")
     normalized_email = normalize_email(user_data.email)
+    contact_number = normalize_contact_number(user_data.contact_number)
+    emp_id = user_data.emp_id.strip() if user_data.emp_id else None
     existing_user = db.query(User).filter(func.lower(User.email) == normalized_email).first()
     if existing_user:
         raise HTTPException(status_code=400, detail="Email already registered")
+    if contact_number:
+        existing_contact = (
+            db.query(User)
+            .filter(User.contact_number == contact_number)
+            .first()
+        )
+        if existing_contact:
+            raise HTTPException(status_code=400, detail="Contact number already registered")
+    if emp_id:
+        existing_emp = (
+            db.query(User)
+            .filter(func.lower(User.emp_id) == emp_id.lower())
+            .first()
+        )
+        if existing_emp:
+            raise HTTPException(status_code=400, detail="Employee ID already registered")
 
     role = UserRole.AGENT
     new_user = User(
         name=user_data.name,
         email=normalized_email,
+        contact_number=contact_number,
+        country=user_data.country,
+        emp_id=emp_id,
         password_hash=get_password_hash(user_data.password),
         role=role
     )
@@ -247,14 +313,80 @@ def reset_password(payload: ResetPasswordRequest, db: Session = Depends(get_db))
     return {"message": "Password reset successfully"}
 
 
+@router.post("/auth/change-password")
+def change_password(
+    payload: ChangePasswordRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    user = db.query(User).filter(User.id == current_user.id).first()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    if not verify_password(payload.current_password, user.password_hash):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Current password is incorrect")
+
+    user.password_hash = get_password_hash(payload.new_password)
+    db.commit()
+    db.refresh(user)
+    return {"message": "Password updated successfully"}
+
+
+@router.patch("/auth/me", response_model=UserResponse)
+def update_me(
+    payload: UserProfileUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    user = db.query(User).filter(User.id == current_user.id).first()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    updates = {}
+    if payload.name is not None:
+        updates["name"] = payload.name
+    if payload.email is not None:
+        normalized_email = normalize_email(payload.email)
+        if normalized_email:
+            existing_email = db.query(User).filter(
+                func.lower(User.email) == normalized_email,
+                User.id != user.id
+            ).first()
+            if existing_email:
+                raise HTTPException(status_code=400, detail="Email already in use")
+            updates["email"] = normalized_email
+        else:
+            updates["email"] = None
+    if payload.contact_number is not None:
+        contact_number = payload.contact_number
+        if contact_number:
+            existing_contact = (
+                db.query(User)
+                .filter(User.contact_number == contact_number, User.id != user.id)
+                .first()
+            )
+            if existing_contact:
+                raise HTTPException(status_code=400, detail="Contact number already in use")
+            updates["contact_number"] = contact_number
+        else:
+            updates["contact_number"] = None
+
+    for key, value in updates.items():
+        setattr(user, key, value)
+
+    db.commit()
+    db.refresh(user)
+    return UserResponse.model_validate(_annotate_user(user))
+
+
 @router.post("/auth/login", response_model=TokenResponse)
 def login(credentials: UserLogin, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.email == credentials.email).first()
+    user = _find_user_by_identifier(db, credentials.identifier)
 
     if not user or not verify_password(credentials.password, user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect email or password"
+            detail="Incorrect email/contact or password"
         )
 
     access_token = create_access_token(data={"user_id": user.id, "email": user.email})

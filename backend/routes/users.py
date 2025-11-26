@@ -29,6 +29,7 @@ from routes.dependencies import (
 )
 from schemas import (
     AdminUserCreate,
+    AdminUserPasswordReset,
     DatabaseOverviewResponse,
     PositionCreate,
     PositionResponse,
@@ -37,8 +38,10 @@ from schemas import (
     UserPositionUpdate,
     UserResponse,
     UserRosterEntry,
+    normalize_contact_number,
 )
 from utils.timezone import utc_now
+from routes.chat_helpers import reassign_chats_from_inactive_agents
 
 router = APIRouter()
 
@@ -132,10 +135,30 @@ def update_user_active_state(
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    if user.id == current_user.id and not payload.is_active:
-        pass
+
+    # Prevent deactivating the last super admin
+    if not payload.is_active:
+        is_target_super_admin = is_super_admin_user(user)
+        if user.id == current_user.id and is_target_super_admin:
+            raise HTTPException(status_code=400, detail="You cannot deactivate your own super admin account")
+        if is_target_super_admin:
+            active_super_admins = (
+                db.query(User)
+                .filter(User.is_active.is_(True))
+                .filter(User.id != user.id)
+                .all()
+            )
+            remaining_super_admins = [u for u in active_super_admins if is_super_admin_user(u)]
+            if not remaining_super_admins:
+                raise HTTPException(status_code=400, detail="Cannot deactivate the only super admin")
+
     user.is_active = payload.is_active
     db.commit()
+    if user.role == UserRole.AGENT and user.is_active is False:
+        try:
+            reassign_chats_from_inactive_agents(db)
+        except Exception:
+            pass
     db.refresh(user)
     return UserResponse.model_validate(_annotate_user(user))
 
@@ -146,14 +169,40 @@ def admin_create_user(
     current_user: User = Depends(require_any_permissions(PermissionCode.USER_INVITE)),
     db: Session = Depends(get_db)
 ):
-    normalized_email = normalize_email(user_data.email)
-    existing_user = db.query(User).filter(func.lower(User.email) == normalized_email).first()
-    if existing_user:
-        raise HTTPException(status_code=400, detail="Email already registered")
+    normalized_email = normalize_email(user_data.email or "")
+    contact_number = normalize_contact_number(user_data.contact_number)
+    emp_id = user_data.emp_id.strip() if user_data.emp_id else None
+
+    if not normalized_email and not contact_number:
+        raise HTTPException(status_code=400, detail="Provide at least an email or contact number")
+
+    if normalized_email:
+        existing_user = db.query(User).filter(func.lower(User.email) == normalized_email).first()
+        if existing_user:
+            raise HTTPException(status_code=400, detail="Email already registered")
+    if contact_number:
+        existing_contact = (
+            db.query(User)
+            .filter(User.contact_number == contact_number)
+            .first()
+        )
+        if existing_contact:
+            raise HTTPException(status_code=400, detail="Contact number already registered")
+    if emp_id:
+        existing_emp = (
+            db.query(User)
+            .filter(func.lower(User.emp_id) == emp_id.lower())
+            .first()
+        )
+        if existing_emp:
+            raise HTTPException(status_code=400, detail="Employee ID already registered")
 
     new_user = User(
         name=user_data.name.strip(),
-        email=normalized_email,
+        email=normalized_email or None,
+        contact_number=contact_number,
+        country=user_data.country,
+        emp_id=emp_id,
         password_hash=get_password_hash(user_data.password),
         role=user_data.role or UserRole.AGENT,
     )
@@ -166,6 +215,24 @@ def admin_create_user(
     db.refresh(new_user)
 
     return UserResponse.model_validate(_annotate_user(new_user))
+
+
+@router.post("/admin/users/{user_id}/reset-password", response_model=UserResponse)
+def admin_reset_password(
+    user_id: str,
+    payload: AdminUserPasswordReset,
+    current_user: User = Depends(get_admin_only_user),
+    db: Session = Depends(get_db),
+):
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    user.password_hash = get_password_hash(payload.new_password)
+    db.commit()
+    db.refresh(user)
+
+    return UserResponse.model_validate(_annotate_user(user))
 
 
 @router.get("/dev/db-overview", response_model=DatabaseOverviewResponse)

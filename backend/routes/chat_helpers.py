@@ -179,3 +179,32 @@ def _serialize_user_light(user: Optional[User]) -> Optional[Dict[str, str]]:
         "name": user.name,
         "email": user.email,
     }
+
+
+def reassign_chats_from_inactive_agents(db: Session) -> int:
+    """
+    Move chats away from inactive agents to active agents in round-robin order.
+    Returns number of chats reassigned.
+    """
+    active_agents = _get_assignable_agents(db)
+    if not active_agents:
+        return 0
+
+    inactive_assigned_chats = (
+        db.query(Chat)
+        .join(User, Chat.assigned_to == User.id)
+        .filter(User.is_active.is_(False))
+        .filter(Chat.status == ChatStatus.ASSIGNED)
+        .all()
+    )
+    if not inactive_assigned_chats:
+        return 0
+
+    reassigned = 0
+    for chat in inactive_assigned_chats:
+        assigned_agent = _assign_chat_round_robin(db, chat)
+        if assigned_agent:
+            reassigned += 1
+    if reassigned:
+        db.commit()
+    return reassigned

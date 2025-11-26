@@ -85,6 +85,7 @@ from permissions import (
 from utils.mailer import send_email
 from routes import auth as auth_routes
 from routes import users as user_routes
+from routes.chat_helpers import reassign_chats_from_inactive_agents
 from routes.dependencies import get_current_user, get_admin_user, get_admin_only_user, require_super_admin, require_permissions, require_any_permissions, _annotate_user, normalize_email
 
 ROOT_DIR = Path(__file__).parent
@@ -199,6 +200,11 @@ app.mount(
 )
 
 
+@app.on_event("startup")
+async def _start_background_tasks():
+    asyncio.create_task(_inactive_agent_reassignment_worker())
+
+
 # Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")
 
@@ -258,6 +264,20 @@ def _download_instagram_attachment(
     except Exception as exc:
         logger.warning("Unable to persist attachment %s: %s", file_path, exc)
         return None
+
+
+async def _inactive_agent_reassignment_worker():
+    """Periodically reassign chats away from inactive agents."""
+    interval_seconds = int(os.getenv("INACTIVE_AGENT_REASSIGN_INTERVAL", "60"))
+    while True:
+        await asyncio.sleep(interval_seconds)
+        try:
+            with SessionLocal() as session:
+                moved = reassign_chats_from_inactive_agents(session)
+                if moved:
+                    logger.info("Reassigned %s chats from inactive agents", moved)
+        except Exception as exc:
+            logger.warning("Inactive agent reassignment failed: %s", exc)
 
     relative_path = file_path.relative_to(ATTACHMENTS_ROOT)
     return str(relative_path).replace(os.sep, "/")
@@ -838,6 +858,60 @@ def _merge_message_metadata(
     return json.dumps(payload) if payload else None
 
 
+def _build_reply_metadata(
+    db: Session,
+    chat: Chat,
+    reply_message_id: Optional[str],
+    reply_preview: Optional[str]
+) -> Dict[str, Any]:
+    """Construct reply metadata payload for outgoing messages."""
+    if not reply_message_id:
+        return {}
+
+    message_model = _message_model_for_platform(chat.platform)
+    reply_target = (
+        db.query(message_model)
+        .filter(
+            message_model.id == reply_message_id,
+            message_model.chat_id == chat.id
+        )
+        .first()
+    )
+    if not reply_target:
+        raise HTTPException(status_code=404, detail="Reply target not found")
+
+    sender_value = reply_target.sender.value if isinstance(reply_target.sender, MessageSender) else str(reply_target.sender or "")
+    sender_lower = sender_value.lower()
+    if sender_lower in {"agent", "instagram_page"}:
+        reply_sender_label = "You"
+    else:
+        if chat.platform == MessagePlatform.FACEBOOK and not chat.facebook_user and chat.facebook_user_id:
+            chat.facebook_user = db.query(FacebookUser).filter(FacebookUser.id == chat.facebook_user_id).first()
+        if chat.platform == MessagePlatform.INSTAGRAM and not chat.instagram_user and chat.instagram_user_id:
+            chat.instagram_user = db.query(InstagramUser).filter(InstagramUser.igsid == chat.instagram_user_id).first()
+        reply_sender_label = (
+            (chat.facebook_user.name if chat.facebook_user else None)
+            or (chat.instagram_user.name if chat.instagram_user else None)
+            or chat.username
+            or "User"
+        )
+
+    preview_text = (reply_preview or reply_target.content or "[attachment]").strip() or "[attachment]"
+    if len(preview_text) > 200:
+        preview_text = f"{preview_text[:197]}..."
+
+    metadata_payload: Dict[str, Any] = {
+        "reply_to": reply_target.id,
+        "reply_preview": preview_text,
+        "reply_sender": reply_sender_label,
+        "reply_sender_type": sender_lower,
+    }
+    fb_mid = _extract_facebook_mid(getattr(reply_target, "metadata_json", None))
+    if fb_mid:
+        metadata_payload["reply_facebook_mid"] = fb_mid
+    return metadata_payload
+
+
 def _parse_ads_context_data(raw: Any) -> Optional[Union[Dict[str, Any], str]]:
     if raw is None:
         return None
@@ -852,6 +926,17 @@ def _parse_ads_context_data(raw: Any) -> Optional[Union[Dict[str, Any], str]]:
         except (ValueError, TypeError):
             return raw
     return None
+
+
+def _extract_facebook_mid(metadata_json: Optional[str]) -> Optional[str]:
+    """Extract facebook_mid (Graph message id) from metadata json."""
+    if not metadata_json:
+        return None
+    try:
+        meta = json.loads(metadata_json)
+    except (TypeError, ValueError):
+        return None
+    return meta.get("facebook_mid") or meta.get("mid")
 
 
 def _normalize_referral_payload(referral: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -3191,6 +3276,22 @@ async def send_message(chat_id: str, message_data: MessageCreate, current_user: 
                     detail="Outside the 24-hour human agent window. Send an approved template instead."
                 )
 
+    attachments_payload = message_data.attachments or []
+    message_content = (message_data.content or "").strip()
+    if not message_content and not attachments_payload:
+        raise HTTPException(status_code=400, detail="Message content or attachment required")
+    if not message_content:
+        message_content = "[attachment]"
+
+    reply_metadata: Dict[str, Any] = {}
+    if message_data.reply_to_message_id:
+        reply_metadata = _build_reply_metadata(
+            db=db,
+            chat=chat,
+            reply_message_id=message_data.reply_to_message_id,
+            reply_preview=message_data.reply_preview
+        )
+
     event_time = utc_now()
 
     # If in mock mode, just create the message without actual platform integration
@@ -3198,15 +3299,19 @@ async def send_message(chat_id: str, message_data: MessageCreate, current_user: 
         new_message = create_chat_message_record(
             chat,
             sender=MessageSender.AGENT,
-            content=message_data.content,
+            content=message_content,
             message_type=message_data.message_type,
             timestamp=event_time,
             is_ticklegram=True,
-            metadata_json=_merge_message_metadata(None, sent_by=current_user)
+            metadata_json=_merge_message_metadata(
+                None,
+                sent_by=current_user,
+                extra=reply_metadata or None
+            )
         )
-        new_message.attachments = []
+        new_message.attachments = attachments_payload
         db.add(new_message)
-        chat.last_message = message_data.content
+        chat.last_message = message_content
         chat.last_outgoing_at = event_time
         chat.updated_at = event_time
         db.commit()
@@ -3222,15 +3327,33 @@ async def send_message(chat_id: str, message_data: MessageCreate, current_user: 
         if chat.facebook_page_id:
             fb_page = db.query(FacebookPage).filter(FacebookPage.page_id == chat.facebook_page_id).first()
             if fb_page and fb_page.is_active:
-                # Send via Facebook Messenger
-                result = await facebook_client.send_text_message(
-                    page_access_token=fb_page.access_token,
-                    recipient_id=chat.facebook_user_id,
-                    text=message_data.content
-                )
-                if not result.get("success"):
-                    logger.error(f"Failed to send Facebook message: {result.get('error')}")
-                    raise HTTPException(status_code=500, detail=f"Failed to send message: {result.get('error')}")
+                reply_mid = reply_metadata.get("reply_facebook_mid")
+                if attachments_payload:
+                    for attachment in attachments_payload:
+                        att_type = (attachment.get("type") or "").lower()
+                        payload = attachment.get("payload") or {}
+                        url = payload.get("url") or attachment.get("url")
+                        if not att_type or not url:
+                            continue
+                        result = await facebook_client.send_attachment(
+                            page_access_token=fb_page.access_token,
+                            recipient_id=chat.facebook_user_id,
+                            attachment_type=att_type,
+                            attachment_url=url
+                        )
+                        if not result.get("success"):
+                            logger.error(f"Failed to send Facebook attachment: {result.get('error')}")
+                            raise HTTPException(status_code=500, detail=f"Failed to send attachment: {result.get('error')}")
+                else:
+                    result = await facebook_client.send_text_message(
+                        page_access_token=fb_page.access_token,
+                        recipient_id=chat.facebook_user_id,
+                        text=message_content,
+                        reply_to_mid=reply_mid
+                    )
+                    if not result.get("success"):
+                        logger.error(f"Failed to send Facebook message: {result.get('error')}")
+                        raise HTTPException(status_code=500, detail=f"Failed to send message: {result.get('error')}")
             else:
                 raise HTTPException(status_code=400, detail="Facebook page not found or inactive")
         else:
@@ -3245,7 +3368,7 @@ async def send_message(chat_id: str, message_data: MessageCreate, current_user: 
                 result = await instagram_client.send_text_message(
                     page_access_token=ig_account.access_token,
                     recipient_id=chat.instagram_user_id,
-                    text=message_data.content
+                    text=message_content
                 )
                 if not result.get("success"):
                     logger.error(f"Failed to send Instagram message: {result.get('error')}")
@@ -3259,17 +3382,22 @@ async def send_message(chat_id: str, message_data: MessageCreate, current_user: 
     new_message = create_chat_message_record(
         chat,
         sender=MessageSender.AGENT,
-        content=message_data.content,
+        content=message_content,
         message_type=message_data.message_type,
         timestamp=event_time,
         is_ticklegram=True,
-        metadata_json=_merge_message_metadata(None, sent_by=current_user)
+        attachments_json=_dump_attachments_json(attachments_payload),
+        metadata_json=_merge_message_metadata(
+            None,
+            sent_by=current_user,
+            extra=reply_metadata or None
+        )
     )
-    new_message.attachments = []
+    new_message.attachments = attachments_payload
     db.add(new_message)
     
     # Update chat
-    chat.last_message = message_data.content
+    chat.last_message = message_content
     chat.last_outgoing_at = event_time
     chat.updated_at = event_time
     
@@ -3748,13 +3876,22 @@ async def send_template(
     # Auto-populate common variables from chat context
     username_value = None
     if chat.platform == MessagePlatform.INSTAGRAM and chat.instagram_user:
-        username_value = chat.instagram_user.username or chat.instagram_user.name
+        username_value = chat.instagram_user.name or chat.instagram_user.username
     if chat.platform == MessagePlatform.FACEBOOK and chat.facebook_user:
-        username_value = chat.facebook_user.username or chat.facebook_user.name
+        username_value = chat.facebook_user.name or chat.facebook_user.username
     username_value = username_value or chat.username or chat.instagram_user_id or chat.facebook_user_id or ""
     message_content = message_content.replace("{username}", username_value)
     message_content = message_content.replace("{platform}", chat.platform.value)
     
+    reply_metadata: Dict[str, Any] = {}
+    if send_request.reply_to_message_id:
+        reply_metadata = _build_reply_metadata(
+            db=db,
+            chat=chat,
+            reply_message_id=send_request.reply_to_message_id,
+            reply_preview=send_request.reply_preview
+        )
+
     meta_template_tag = os.getenv("META_TEMPLATE_TAG", "ACCOUNT_UPDATE")
     use_meta_template = template.is_meta_approved
     event_time = utc_now()
@@ -3773,7 +3910,11 @@ async def send_template(
             message_type=MessageType.TEXT,
             timestamp=event_time,
             is_ticklegram=True,
-            metadata_json=_merge_message_metadata(None, sent_by=current_user)
+            metadata_json=_merge_message_metadata(
+                None,
+                sent_by=current_user,
+                extra=reply_metadata or None
+            )
         )
         new_message.attachments = []
         db.add(new_message)
@@ -3797,13 +3938,15 @@ async def send_template(
                             recipient_id=chat.facebook_user_id,
                             text=message_content,
                             template_id=template.meta_template_id,
-                            tag=meta_template_tag
+                            tag=meta_template_tag,
+                            reply_to_mid=reply_metadata.get("reply_facebook_mid")
                         )
                     else:
                         result = await facebook_client.send_text_message(
                             page_access_token=fb_page.access_token,
                             recipient_id=chat.facebook_user_id,
-                            text=message_content
+                            text=message_content,
+                            reply_to_mid=reply_metadata.get("reply_facebook_mid")
                         )
                     if not result.get("success"):
                         raise HTTPException(status_code=500, detail=f"Failed to send message: {result.get('error')}")
@@ -3837,22 +3980,26 @@ async def send_template(
             else:
                 raise HTTPException(status_code=400, detail="No Instagram account associated with this chat")
         
-        new_message = create_chat_message_record(
-            chat,
-            sender=MessageSender.AGENT,
-            content=message_content,
-            message_type=MessageType.TEXT,
-            timestamp=event_time,
-            is_ticklegram=True,
-            metadata_json=_merge_message_metadata(None, sent_by=current_user)
+    new_message = create_chat_message_record(
+        chat,
+        sender=MessageSender.AGENT,
+        content=message_content,
+        message_type=MessageType.TEXT,
+        timestamp=event_time,
+        is_ticklegram=True,
+        metadata_json=_merge_message_metadata(
+            None,
+            sent_by=current_user,
+            extra=reply_metadata or None
         )
-        new_message.attachments = []
-        db.add(new_message)
-        chat.last_message = message_content
-        chat.last_outgoing_at = event_time
-        chat.updated_at = event_time
-        db.commit()
-        db.refresh(new_message)
+    )
+        # new_message.attachments = []
+        # db.add(new_message)
+        # chat.last_message = message_content
+        # chat.last_outgoing_at = event_time
+        # chat.updated_at = event_time
+        # db.commit()
+        # db.refresh(new_message)
     
     # Broadcast via WebSocket
     message_payload = MessageResponse.model_validate(new_message).model_dump(mode="json")
@@ -3947,9 +4094,14 @@ async def handle_facebook_webhook(request: Request, db: Session = Depends(get_db
                         fb_referral_payload = _normalize_referral_payload(
                             _extract_messaging_referral(messaging_event)
                         )
+                        fb_extra_meta: Dict[str, Any] = {}
+                        if fb_referral_payload:
+                            fb_extra_meta["referral"] = fb_referral_payload
+                        if processed.get("message_id"):
+                            fb_extra_meta["facebook_mid"] = processed.get("message_id")
                         fb_metadata_json = _merge_message_metadata(
                             None,
-                            extra={"referral": fb_referral_payload} if fb_referral_payload else None
+                            extra=fb_extra_meta or None
                         )
                         
                         chat = db.query(Chat).filter(

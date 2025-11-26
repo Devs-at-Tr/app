@@ -226,6 +226,47 @@ async def send_message(
     if not message_content:
         raise HTTPException(status_code=400, detail="Message content cannot be empty")
 
+    reply_metadata: Dict[str, Any] = {}
+    if message_data.reply_to_message_id:
+        message_model = _message_model_for_platform(chat.platform)
+        reply_target = (
+            db.query(message_model)
+            .filter(
+                message_model.id == message_data.reply_to_message_id,
+                message_model.chat_id == chat.id
+            )
+            .first()
+        )
+        if not reply_target:
+            raise HTTPException(status_code=404, detail="Reply target not found")
+        sender_value = reply_target.sender.value if isinstance(reply_target.sender, MessageSender) else str(reply_target.sender or "")
+        sender_lower = sender_value.lower()
+        if sender_lower in {"agent", "instagram_page"}:
+            reply_sender_label = "You"
+        else:
+            if chat.platform == MessagePlatform.FACEBOOK and not chat.facebook_user and chat.facebook_user_id:
+                chat.facebook_user = db.query(FacebookUser).filter(FacebookUser.id == chat.facebook_user_id).first()
+            if chat.platform == MessagePlatform.INSTAGRAM and not chat.instagram_user and chat.instagram_user_id:
+                chat.instagram_user = db.query(InstagramUser).filter(InstagramUser.igsid == chat.instagram_user_id).first()
+            reply_sender_label = (
+                (chat.facebook_user.name if chat.facebook_user else None)
+                or (chat.instagram_user.name if chat.instagram_user else None)
+                or chat.username
+                or "User"
+            )
+        preview_text = message_data.reply_preview or reply_target.content or "[attachment]"
+        preview_text = preview_text.strip()
+        if not preview_text:
+            preview_text = "[attachment]"
+        if len(preview_text) > 200:
+            preview_text = f"{preview_text[:197]}..."
+        reply_metadata = {
+            "reply_to": reply_target.id,
+            "reply_preview": preview_text,
+            "reply_sender": reply_sender_label,
+            "reply_sender_type": sender_lower,
+        }
+
     event_time = utc_now()
     new_message = create_chat_message_record(
         chat,
@@ -234,7 +275,11 @@ async def send_message(
         message_type=MessageType.TEXT,
         timestamp=event_time,
         is_ticklegram=False,
-        metadata_json=_merge_message_metadata(None, sent_by=current_user)
+        metadata_json=_merge_message_metadata(
+            None,
+            sent_by=current_user,
+            extra=reply_metadata or None
+        )
     )
     new_message.attachments = []
     db.add(new_message)

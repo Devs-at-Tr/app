@@ -5,10 +5,12 @@ import { API } from '../App';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
+import { Eye, EyeOff } from 'lucide-react';
 
 const LoginPage = ({ onLogin, allowPublicSignup = false, forgotPasswordEnabled = true }) => {
-  const [email, setEmail] = useState('');
+  const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState(null);
@@ -37,12 +39,22 @@ const LoginPage = ({ onLogin, allowPublicSignup = false, forgotPasswordEnabled =
 
     try {
       const response = await axios.post(`${API}/auth/login`, {
-        email,
+        identifier,
         password
       });
       onLogin(response.data.user, response.data.access_token);
     } catch (err) {
-      setError(err.response?.data?.detail || 'Login failed. Please try again.');
+      const detail = err.response?.data?.detail;
+      let message = 'Login failed. Please try again.';
+      if (typeof detail === 'string') {
+        message = detail;
+      } else if (Array.isArray(detail)) {
+        message = detail
+          .map((item) => item?.msg || item?.message || JSON.stringify(item))
+          .filter(Boolean)
+          .join('; ');
+      }
+      setError(message);
     } finally {
       setLoading(false);
     }
@@ -90,14 +102,14 @@ const LoginPage = ({ onLogin, allowPublicSignup = false, forgotPasswordEnabled =
 
           <form onSubmit={handleSubmit} className="space-y-5">
             <div>
-              <Label htmlFor="email" className="text-gray-300 mb-2 block">Email</Label>
+              <Label htmlFor="identifier" className="text-gray-300 mb-2 block">Email or contact number</Label>
               <Input
-                id="email"
-                type="email"
-                data-testid="login-email-input"
-                placeholder="admin@ticklegram.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                id="identifier"
+                type="text"
+                data-testid="login-identifier-input"
+                placeholder="admin@ticklegram.com or +1 415 555 0100"
+                value={identifier}
+                onChange={(e) => setIdentifier(e.target.value)}
                 required
                 className="bg-[#05060d]/70 border-gray-800 text-white placeholder:text-gray-500 focus:border-purple-400 focus:ring-2 focus:ring-purple-500/40 focus:ring-offset-2 focus:ring-offset-[#111328] h-12 transition"
               />
@@ -105,16 +117,26 @@ const LoginPage = ({ onLogin, allowPublicSignup = false, forgotPasswordEnabled =
 
             <div>
               <Label htmlFor="password" className="text-gray-300 mb-2 block">Password</Label>
-              <Input
-                id="password"
-                type="password"
-                data-testid="login-password-input"
-                placeholder="••••••••"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                className="bg-[#05060d]/70 border-gray-800 text-white placeholder:text-gray-500 focus:border-purple-400 focus:ring-2 focus:ring-purple-500/40 focus:ring-offset-2 focus:ring-offset-[#111328] h-12 transition"
-              />
+              <div className="relative">
+                <Input
+                  id="password"
+                  type={showPassword ? 'text' : 'password'}
+                  data-testid="login-password-input"
+                  placeholder="Password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  className="bg-[#05060d]/70 border-gray-800 text-white placeholder:text-gray-500 focus:border-purple-400 focus:ring-2 focus:ring-purple-500/40 focus:ring-offset-2 focus:ring-offset-[#111328] h-12 transition pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((prev) => !prev)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-200"
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                >
+                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
             </div>
 
             {forgotPasswordEnabled && (

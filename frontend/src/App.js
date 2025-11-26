@@ -16,6 +16,7 @@ import ForgotPasswordPage from './pages/ForgotPasswordPage';
 import ResetPasswordPage from './pages/ResetPasswordPage';
 import CreateUserPage from './pages/CreateUserPage';
 import DatabaseVisualizerPage from './pages/DatabaseVisualizerPage';
+import ProfilePage from './pages/ProfilePage'; //profile page imported
 
 // Get backend URL from environment or use relative path for Kubernetes ingress
 export const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || '';
@@ -221,6 +222,16 @@ function App() {
               element={
                 user ? (
                   <PositionsPage user={user} onLogout={handleLogout} />
+                ) : (
+                  <Navigate to="/login" replace />
+                )
+              }
+            />
+            <Route
+              path="/profile"
+              element={
+                user ? (
+                  <ProfilePage user={user} onLogout={handleLogout} />
                 ) : (
                   <Navigate to="/login" replace />
                 )

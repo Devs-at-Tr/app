@@ -202,15 +202,25 @@ export const ChatProvider = ({ children, userRole }) => {
     }
   }, []);
 
-  const sendMessage = useCallback(async (chatId, content) => {
+  const sendMessage = useCallback(async (chatId, content, options = {}) => {
     try {
       const token = localStorage.getItem('token');
       if (!token) throw new Error('No authentication token found');
 
       const headers = { Authorization: `Bearer ${token}` };
+      const payload = { content };
+      if (options.replyTo?.id) {
+        payload.reply_to_message_id = options.replyTo.id;
+        if (options.replyTo.preview) {
+          payload.reply_preview = options.replyTo.preview;
+        }
+      }
+      if (options.attachments?.length) {
+        payload.attachments = options.attachments;
+      }
       const response = await axios.post(
         `${API}/chats/${chatId}/message`,
-        { content },
+        payload,
         { headers }
       );
 
