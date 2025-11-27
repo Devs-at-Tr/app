@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react';
 import { useChatContext } from '../context/ChatContext';
 import { cn } from '../lib/utils';
 import {
@@ -19,7 +19,7 @@ import {
   DialogTitle,
 } from './ui/dialog';
 import { Badge } from './ui/badge';
-import { Send, UserPlus, Instagram, FileText, CheckCircle, Search, X, ChevronLeft, Info, CornerUpLeft, Smile, Paperclip } from 'lucide-react';
+import { Send, UserPlus, Instagram, FileText, CheckCircle, Search, X, ChevronLeft, Info, CornerUpLeft, Smile, Paperclip, PhoneCall } from 'lucide-react';
 import axios from 'axios';
 import { API, BACKEND_URL } from '../App';
 import { useIsMobile, useIsTablet } from '../hooks/useMediaQuery';
@@ -124,7 +124,17 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
   const [showAttachmentForm, setShowAttachmentForm] = useState(false);
   const [attachmentUrl, setAttachmentUrl] = useState('');
   const [attachmentType, setAttachmentType] = useState('image');
+  const [showInquiryModal, setShowInquiryModal] = useState(false);
+  const [inquiryNumber, setInquiryNumber] = useState('');
+  const [inquiryNotes, setInquiryNotes] = useState('');
+  const [inquiryName, setInquiryName] = useState('');
+  const [inquiryEmail, setInquiryEmail] = useState('');
+  const [inquiryCity, setInquiryCity] = useState('');
+  const [inquiryAddress, setInquiryAddress] = useState('');
+  const [inquiryDob, setInquiryDob] = useState('');
+  const [inquiryWhatsApp, setInquiryWhatsApp] = useState('');
   const messagesEndRef = useRef(null);
+  const messagesContainerRef = useRef(null);
   const longPressTimerRef = useRef(null);
   const messageRefs = useRef({});
   const emojiPopoverRef = useRef(null);
@@ -170,7 +180,7 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
 
   useEffect(() => {
     scrollToBottom();
-  }, [chat?.messages]);
+  }, [chat?.id]);
 
   useEffect(() => {
     setReplyTarget(null);
@@ -264,8 +274,14 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
       });
   }, [chat?.messages]);
 
+  useLayoutEffect(() => {
+    scrollToBottom();
+  }, [orderedMessages]);
+
   const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (messagesContainerRef.current) {
+      messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
+    }
   };
 
   // Load templates when dialog opens
@@ -670,7 +686,7 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
           </div>
         </div>
         {/* Messages */}
-        <div className="conversation-body space-y-1.5 chat-scroll" data-testid="messages-container">
+        <div className="conversation-body space-y-1.5 chat-scroll" data-testid="messages-container" ref={messagesContainerRef}>
           {orderedMessages.length === 0 ? (
             <div className="text-center text-gray-500 mt-8">No messages yet</div>
           ) : (
@@ -707,6 +723,13 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
                 const placeholderText = (msg.content || '').trim().toLowerCase();
                 const hideText = (hasAttachments || templatePayload) && (placeholderText === '[attachment]' || placeholderText === '');
                 const displayText = hideText ? '' : msg.content;
+                const phoneMatch = (() => {
+                  if (!displayText) return null;
+                  const match = displayText.match(/\+?\d[\d\s().-]{6,}\d/);
+                  if (!match) return null;
+                  const normalized = match[0].replace(/[^\d+]/g, '');
+                  return normalized;
+                })();
                 const dayLabel = msg.timestamp ? formatMessageDay(msg.timestamp) : (msg.ts ? formatMessageDay(new Date(msg.ts * 1000).toISOString()) : '');
                 const showDayLabel = dayLabel && dayLabel !== lastRenderedDay;
                 if (showDayLabel) {
@@ -746,7 +769,31 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
                         className={`max-w-[70%] rounded-2xl px-4 py-3 ${bubbleClasses}`}
                       >
                         {displayText && (
-                          <p className="text-sm whitespace-pre-line break-words">{displayText}</p>
+                          <div className="flex items-start gap-2">
+                            <p className="text-sm whitespace-pre-line break-words flex-1">{displayText}</p>
+                            {phoneMatch && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setInquiryNumber(phoneMatch);
+                                  setInquiryNotes(`Inquiry from chat ${chat?.id || ''}`);
+                                  setInquiryName(chatDisplayName || '');
+                                  setInquiryEmail(
+                                    chat?.instagram_user?.email ||
+                                    chat?.facebook_user?.email ||
+                                    ''
+                                  );
+                                  setInquiryCity('');
+                                  setInquiryAddress('');
+                                  setShowInquiryModal(true);
+                                }}
+                                className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-[var(--tg-surface-muted)] text-[var(--tg-text-primary)] border border-[var(--tg-border-soft)] hover:bg-[var(--tg-chat-hover)] transition"
+                                title="Create inquiry"
+                              >
+                                <PhoneCall className="w-4 h-4" />
+                              </button>
+                            )}
+                          </div>
                         )}
                         {originLabel && (
                           <p className="text-[11px] text-purple-200/80 italic mt-1">
@@ -935,7 +982,7 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
 
         {/* Template Selector Dialog */}
         <Dialog open={showTemplateDialog} onOpenChange={setShowTemplateDialog}>
-          <DialogContent className="bg-[#1a1a2e] border-gray-700 text-white sm:max-w-[700px] max-h-[80vh]">
+          <DialogContent className="bg-[#1a1a2e] border-gray-700 text-white sm:max-w-[1024px] max-h-[80vh]">
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2">
                 <FileText className="w-5 h-5" />
@@ -1061,6 +1108,99 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
                   )}
                 </div>
               )}
+            </div>
+          </DialogContent>
+        </Dialog>
+        <Dialog open={showInquiryModal} onOpenChange={setShowInquiryModal}>
+          <DialogContent className="bg-[var(--tg-surface)] border border-[var(--tg-border-soft)] text-[var(--tg-text-primary)] sm:max-w-[900px]">
+            <DialogHeader>
+              <DialogTitle>Create inquiry</DialogTitle>
+              <DialogDescription className="text-[var(--tg-text-muted)]">
+                Prefill a new inquiry with the detected phone number.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3">
+              <div className="grid sm:grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="text-xs text-[var(--tg-text-secondary)]">Name</label>
+                  <Input
+                    value={inquiryName}
+                    onChange={(e) => setInquiryName(e.target.value)}
+                    placeholder="Contact name"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-[var(--tg-text-secondary)]">Phone number</label>
+                  <Input
+                    value={inquiryNumber}
+                    onChange={(e) => setInquiryNumber(e.target.value)}
+                    autoComplete="off"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-[var(--tg-text-secondary)]">Email</label>
+                  <Input
+                    type="email"
+                    value={inquiryEmail}
+                    onChange={(e) => setInquiryEmail(e.target.value)}
+                    placeholder="user@example.com"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-[var(--tg-text-secondary)]">WhatsApp number</label>
+                  <Input
+                    value={inquiryWhatsApp}
+                    onChange={(e) => setInquiryWhatsApp(e.target.value)}
+                    placeholder="+1 555 000 0000"
+                  />
+                </div>
+                <div className="space-y-1">
+                <label className="text-xs text-[var(--tg-text-secondary)]">Date of birth</label>
+                <Input
+                  type="date"
+                  value={inquiryDob}
+                  onChange={(e) => setInquiryDob(e.target.value)}
+                  max={new Date().toISOString().split('T')[0]}
+                />
+              </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-[var(--tg-text-secondary)]">City</label>
+                  <Input
+                    value={inquiryCity}
+                    onChange={(e) => setInquiryCity(e.target.value)}
+                    placeholder="City"
+                  />
+                </div>
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs text-[var(--tg-text-secondary)]">Address</label>
+                <Textarea
+                  value={inquiryAddress}
+                  onChange={(e) => setInquiryAddress(e.target.value)}
+                  placeholder="Street, area, zip"
+                  className="min-h-[70px] bg-[var(--tg-surface-muted)] border-[var(--tg-border-soft)]"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs text-[var(--tg-text-secondary)]">Notes</label>
+                <Textarea
+                  value={inquiryNotes}
+                  onChange={(e) => setInquiryNotes(e.target.value)}
+                  placeholder="Optional context for this inquiry"
+                  className="min-h-[90px] bg-[var(--tg-surface-muted)] border-[var(--tg-border-soft)]"
+                />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="ghost" onClick={() => setShowInquiryModal(false)}>
+                Cancel
+              </Button>
+              <Button
+                className="bg-gradient-to-r from-purple-500 via-pink-500 to-orange-400 text-white"
+                onClick={() => setShowInquiryModal(false)}
+              >
+                Create inquiry
+              </Button>
             </div>
           </DialogContent>
         </Dialog>

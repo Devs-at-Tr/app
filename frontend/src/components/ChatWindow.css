@@ -1,7 +1,7 @@
 .chat-scroll {
   scrollbar-width: thin;
   scrollbar-color: rgba(155, 92, 246, 0.3) transparent;
-  scroll-behavior: smooth;
+  scroll-behavior: auto;
   min-height: 0;
 }
 
