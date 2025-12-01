@@ -27,6 +27,54 @@ import './ChatWindow.css';
 
 const HUMAN_AGENT_WINDOW_MS = 24 * 60 * 60 * 1000;
 
+const TIMEZONE_TO_ISO2 = {
+  'Asia/Kolkata': 'IN',
+  'Asia/Calcutta': 'IN',
+  'Asia/Kathmandu': 'NP',
+  'Asia/Dhaka': 'BD',
+  'Asia/Karachi': 'PK',
+  'Asia/Colombo': 'LK',
+  'Asia/Dubai': 'AE',
+  'Europe/London': 'GB',
+  'Europe/Berlin': 'DE',
+  'Europe/Madrid': 'ES',
+  'Europe/Paris': 'FR',
+  'Europe/Rome': 'IT',
+  'Europe/Lisbon': 'PT',
+  'Europe/Amsterdam': 'NL',
+  'Europe/Brussels': 'BE',
+  'Europe/Oslo': 'NO',
+  'Europe/Stockholm': 'SE',
+  'Europe/Copenhagen': 'DK',
+  'Europe/Zurich': 'CH',
+  'Europe/Warsaw': 'PL',
+  'Europe/Prague': 'CZ',
+  'Europe/Dublin': 'IE',
+  'Europe/Vienna': 'AT',
+  'America/New_York': 'US',
+  'America/Chicago': 'US',
+  'America/Denver': 'US',
+  'America/Los_Angeles': 'US',
+  'America/Toronto': 'CA',
+  'America/Vancouver': 'CA',
+  'America/Mexico_City': 'MX',
+  'America/Sao_Paulo': 'BR',
+  'America/Bogota': 'CO',
+  'America/Lima': 'PE',
+  'America/Argentina/Buenos_Aires': 'AR',
+  'Africa/Johannesburg': 'ZA',
+  'Africa/Lagos': 'NG',
+  'Africa/Cairo': 'EG',
+  'Africa/Nairobi': 'KE',
+  'Asia/Tokyo': 'JP',
+  'Asia/Seoul': 'KR',
+  'Asia/Shanghai': 'CN',
+  'Asia/Singapore': 'SG',
+  'Asia/Bangkok': 'TH',
+  'Asia/Jakarta': 'ID',
+  'Asia/Manila': 'PH',
+  'Asia/Hong_Kong': 'HK',
+};
 const getChatHandle = (chat) =>
   chat?.instagram_user?.username ||
   chat?.username ||
@@ -83,6 +131,124 @@ const getMessageSnippet = (message) => {
   return '';
 };
 
+const normalizeCountryCode = (value = '') => {
+  const stripped = value.replace(/[^\d+]/g, '');
+  const digitsOnly = stripped.replace(/\+/g, '');
+  if (!digitsOnly) {
+    return '';
+  }
+  return `+${digitsOnly}`;
+};
+
+const normalizeLocalPhoneNumber = (value = '') =>
+  value.replace(/[^\d]/g, '').replace(/^0+/, '');
+
+const buildE164Number = (countryCode, localNumber) => {
+  const normalizedCode = normalizeCountryCode(countryCode);
+  const normalizedLocal = normalizeLocalPhoneNumber(localNumber);
+  if (!normalizedCode || !normalizedLocal) {
+    return '';
+  }
+  return `${normalizedCode}${normalizedLocal}`;
+};
+
+const isValidE164Number = (value = '') => /^\+[1-9]\d{6,14}$/.test(value);
+
+const formatDialCode = (value = '') => {
+  const digits = String(value || '').replace(/[^\d]/g, '');
+  return digits ? `+${digits}` : '';
+};
+
+const detectRegionFromLocales = (countries = []) => {
+  const resolveRegion = (locale) => (locale?.split('-')[1] || '').toUpperCase();
+  const locales = [];
+  try {
+    if (Array.isArray(navigator.languages)) {
+      locales.push(...navigator.languages);
+    }
+    if (navigator.language) {
+      locales.push(navigator.language);
+    }
+  } catch (e) {
+    // ignore
+  }
+  locales.push(Intl.DateTimeFormat().resolvedOptions().locale || '');
+  for (const locale of locales) {
+    const region = resolveRegion(locale);
+    if (region) {
+      const match = countries.find((c) => c.iso2 === region);
+      if (match?.phonecode) return match.phonecode;
+    }
+  }
+  return null;
+};
+
+const detectRegionFromCountryTimezones = (countries = []) => {
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (!tz) return null;
+    const match = countries.find((c) => Array.isArray(c.timezones) && c.timezones.includes(tz));
+    return match?.phonecode || null;
+  } catch (e) {
+    return null;
+  }
+};
+
+const detectRegionFromTimezone = (countries = []) => {
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const iso2 = TIMEZONE_TO_ISO2[tz];
+    if (iso2) {
+      const match = countries.find((c) => c.iso2 === iso2);
+      if (match?.phonecode) return match.phonecode;
+    }
+  } catch (e) {
+    // ignore
+  }
+  return null;
+};
+
+const detectRegionFromIP = async (countries = []) => {
+  try {
+    const res = await fetch('https://ipapi.co/json/');
+    if (!res.ok) return null;
+    console.log('IP location response status:', res.status);
+    const data = await res.json();
+    console.log('IP location data:', data);
+    const iso2 = (data?.country || data?.countryCode || '').toUpperCase();
+    const tz = data?.timezone;
+
+    if (iso2 && iso2.length === 2) {
+      const matchByIso = countries.find((c) => c.iso2 === iso2);
+      if (matchByIso?.phonecode) return matchByIso.phonecode;
+    }
+
+    if (tz) {
+      const matchByTz = countries.find((c) => Array.isArray(c.timezones) && c.timezones.includes(tz));
+      if (matchByTz?.phonecode) return matchByTz.phonecode;
+    }
+  } catch (e) {
+    console.warn('IP country lookup failed', e);
+  }
+  return null;
+};
+
+const resolveBrowserDialCode = async (countries = []) => {
+  const fromIp = await detectRegionFromIP(countries);
+  if (fromIp) return fromIp;
+
+  const fromCountryTimezone = detectRegionFromCountryTimezones(countries);
+  if (fromCountryTimezone) return fromCountryTimezone;
+
+  const fromLocale = detectRegionFromLocales(countries);
+  if (fromLocale) return fromLocale;
+
+  const fromTz = detectRegionFromTimezone(countries);
+  if (fromTz) return fromTz;
+
+  return null;
+};
+
 const FacebookIcon = ({ className }) => (
   <svg className={className} viewBox="0 0 24 24" fill="currentColor">
     <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
@@ -107,6 +273,7 @@ const getSenderLabel = (message, chat) => {
 
 const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, onBackToList }) => {
   const { selectedChat: chat, sendMessage } = useChatContext();
+  const isFacebookChat = chat?.platform === 'FACEBOOK';
   const isMobile = useIsMobile(); // Must be at top level before any conditional logic
   const isTablet = useIsTablet();
   const [message, setMessage] = useState('');
@@ -124,6 +291,7 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
   const [showAttachmentForm, setShowAttachmentForm] = useState(false);
   const [attachmentUrl, setAttachmentUrl] = useState('');
   const [attachmentType, setAttachmentType] = useState('image');
+  const attachmentsEnabled = false;
   const [showInquiryModal, setShowInquiryModal] = useState(false);
   const [inquiryNumber, setInquiryNumber] = useState('');
   const [inquiryNotes, setInquiryNotes] = useState('');
@@ -133,6 +301,19 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
   const [inquiryAddress, setInquiryAddress] = useState('');
   const [inquiryDob, setInquiryDob] = useState('');
   const [inquiryWhatsApp, setInquiryWhatsApp] = useState('');
+  const [inquiryCountryCode, setInquiryCountryCode] = useState('+1');
+  const [inquiryPhoneError, setInquiryPhoneError] = useState('');
+  const [countryCodeManuallySet, setCountryCodeManuallySet] = useState(false);
+  const [countryOptions, setCountryOptions] = useState([]);
+  const [isLoadingCountries, setIsLoadingCountries] = useState(false);
+  const [hasAutoSetCountry, setHasAutoSetCountry] = useState(false);
+  const hasCountryOptions = countryOptions.length > 0;
+  const [duplicateCheckStatus, setDuplicateCheckStatus] = useState(null); // null | 'ok' | 'duplicate' | 'error'
+  const [duplicateCheckMessage, setDuplicateCheckMessage] = useState('');
+  const [isCheckingDuplicate, setIsCheckingDuplicate] = useState(false);
+  const [phoneValidationStatus, setPhoneValidationStatus] = useState(null); // null | 'valid' | 'invalid' | 'error'
+  const [phoneValidationMessage, setPhoneValidationMessage] = useState('');
+  const [isValidatingPhone, setIsValidatingPhone] = useState(false);
   const messagesEndRef = useRef(null);
   const messagesContainerRef = useRef(null);
   const longPressTimerRef = useRef(null);
@@ -355,6 +536,42 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
     }
   };
 
+  const fetchCountries = useCallback(async () => {
+    setIsLoadingCountries(true);
+    try {
+      const token = localStorage.getItem('token');
+      const response = await axios.get(`${API}/countries`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      });
+      const mapped = (response.data || [])
+        .map((country) => {
+          const dial = formatDialCode(country.phonecode || country.code || country.phone || country.phone_code);
+          if (!dial) {
+            return null;
+          }
+          return {
+            id: country.id || country.iso2 || dial,
+            name: country.name || country.iso2 || dial,
+            iso2: (country.iso2 || '').toUpperCase(),
+            phonecode: dial,
+            timezones: Array.isArray(country.timezones) ? country.timezones : [],
+          };
+        })
+        .filter(Boolean);
+      if (mapped.length > 0) {
+        setCountryOptions(mapped);
+      }
+    } catch (error) {
+      console.error('Error loading countries:', error);
+    } finally {
+      setIsLoadingCountries(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchCountries();
+  }, [fetchCountries]);
+
   const extractVariables = (content) => {
     const regex = /\{([^}]+)\}/g;
     const variables = [];
@@ -415,12 +632,140 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
   }, [chat?.messages]);
 
   const canSendManualMessage = useMemo(() => {
+    if (!isFacebookChat) {
+      return true; // 24-hour window enforced only for Facebook chats
+    }
     if (!lastCustomerMessageTimestamp) {
       return true; // Allow if no inbound message recorded yet
     }
     const now = Date.now();
     return now - lastCustomerMessageTimestamp <= HUMAN_AGENT_WINDOW_MS;
-  }, [lastCustomerMessageTimestamp]);
+  }, [isFacebookChat, lastCustomerMessageTimestamp]);
+
+  const show24hExpiryNotice = isFacebookChat && !canSendManualMessage;
+
+  const normalizedInquiryPhone = useMemo(
+    () => buildE164Number(inquiryCountryCode, inquiryNumber),
+    [inquiryCountryCode, inquiryNumber]
+  );
+
+  const inquiryPhoneIsValid = useMemo(
+    () => isValidE164Number(normalizedInquiryPhone),
+    [normalizedInquiryPhone]
+  );
+
+  const isPhoneInvalid =
+    phoneValidationStatus === 'invalid' ||
+    phoneValidationStatus === 'error' ||
+    Boolean(inquiryPhoneError) ||
+    !inquiryPhoneIsValid;
+  const hasDuplicateCheck = duplicateCheckStatus !== null;
+  const canCreateInquiry =
+    inquiryPhoneIsValid &&
+    duplicateCheckStatus === 'ok' &&
+    !isCheckingDuplicate &&
+    !isPhoneInvalid;
+
+  useEffect(() => {
+    if (!inquiryNumber && !inquiryCountryCode) {
+      setInquiryPhoneError('');
+      return;
+    }
+    if (!inquiryPhoneIsValid) {
+      setInquiryPhoneError('Invalid phone number for the selected country code.');
+    } else {
+      setInquiryPhoneError('');
+    }
+  }, [inquiryNumber, inquiryCountryCode, inquiryPhoneIsValid]);
+
+  useEffect(() => {
+    setDuplicateCheckStatus(null);
+    setDuplicateCheckMessage('');
+  }, [inquiryNumber, inquiryCountryCode]);
+
+  useEffect(() => {
+    if (!inquiryCountryCode && !inquiryNumber) {
+      setPhoneValidationStatus(null);
+      setPhoneValidationMessage('');
+      return;
+    }
+    const local = normalizeLocalPhoneNumber(inquiryNumber);
+    if (!local) {
+      setPhoneValidationStatus('invalid');
+      setPhoneValidationMessage('Enter a phone number');
+      return;
+    }
+    const customHint = (() => {
+      const ccDigits = (inquiryCountryCode || '').replace(/[^\d]/g, '');
+      if (ccDigits === '91' && local.length !== 10) {
+        return 'Indian numbers must be exactly 10 digits.';
+      }
+      if (local.length < 4) {
+        return 'Number looks too short.';
+      }
+      return null;
+    })();
+    if (customHint) {
+      setPhoneValidationStatus('invalid');
+      setPhoneValidationMessage(customHint);
+      setIsValidatingPhone(false);
+      return;
+    }
+    const handle = setTimeout(async () => {
+      setIsValidatingPhone(true);
+      setPhoneValidationStatus(null);
+      setPhoneValidationMessage('');
+      try {
+        const token = localStorage.getItem('token');
+        const resp = await axios.post(
+          `${API}/validate-phone`,
+          {
+            country_code: inquiryCountryCode,
+            phone_number: local,
+          },
+          { headers: token ? { Authorization: `Bearer ${token}` } : undefined }
+        );
+        const data = resp.data || {};
+        if (data.valid) {
+          setPhoneValidationStatus('valid');
+          setPhoneValidationMessage(data.formatted?.international || 'Valid phone number');
+        } else {
+          setPhoneValidationStatus('invalid');
+          const friendly =
+            customHint ||
+            data.message ||
+            'Enter a valid phone number with country code.';
+          setPhoneValidationMessage(friendly);
+        }
+      } catch (error) {
+        console.error('Phone validation failed', error);
+        const detail =
+          error.response?.data?.detail ||
+          error.response?.data?.message ||
+          error.message ||
+          'Validation failed';
+        setPhoneValidationStatus('error');
+        setPhoneValidationMessage(detail);
+      } finally {
+        setIsValidatingPhone(false);
+      }
+    }, 400);
+    return () => clearTimeout(handle);
+  }, [inquiryCountryCode, inquiryNumber]);
+
+  useEffect(() => {
+    if (countryCodeManuallySet || hasAutoSetCountry) return;
+    if (!countryOptions.length) return;
+    (async () => {
+      const detected = await resolveBrowserDialCode(countryOptions);
+      if (detected && detected !== inquiryCountryCode) {
+        setInquiryCountryCode(detected);
+      } else if (!detected && countryOptions[0]?.phonecode && countryOptions[0].phonecode !== inquiryCountryCode) {
+        setInquiryCountryCode(countryOptions[0].phonecode);
+      }
+      setHasAutoSetCountry(true);
+    })();
+  }, [countryCodeManuallySet, countryOptions, inquiryCountryCode, hasAutoSetCountry]);
 
   useEffect(() => {
     if (!canSendManualMessage) {
@@ -506,6 +851,62 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
   const handleCloseProfile = useCallback(() => {
     setIsProfileOpen(false);
   }, []);
+
+  const handleCreateInquiry = useCallback(() => {
+    if (!inquiryPhoneIsValid || isPhoneInvalid) {
+      setInquiryPhoneError('Please enter a valid phone number before creating an inquiry.');
+      return;
+    }
+    if (duplicateCheckStatus !== 'ok') {
+      setInquiryPhoneError('Please run duplicate check and ensure the number is available.');
+      return;
+    }
+    setShowInquiryModal(false);
+  }, [inquiryPhoneIsValid, isPhoneInvalid, duplicateCheckStatus]);
+
+  const handleCheckDuplicate = useCallback(async () => {
+    const local = normalizeLocalPhoneNumber(inquiryNumber);
+    if (!local) {
+      setDuplicateCheckStatus('error');
+      setDuplicateCheckMessage('Enter a phone number to check');
+      return;
+    }
+    setIsCheckingDuplicate(true);
+    setDuplicateCheckStatus(null);
+    setDuplicateCheckMessage('');
+    try {
+      const token = localStorage.getItem('token');
+      const resp = await axios.post(
+        `${API}/admin/check-duplicate-mobile`,
+        {
+          mobile: local,
+          country_code: inquiryCountryCode,
+        },
+        { headers: token ? { Authorization: `Bearer ${token}` } : undefined }
+      );
+      const data = resp.data || {};
+      const isError = Number(data.error) === 1;
+      const hasDupes = Array.isArray(data.data) && data.data.length > 0;
+      const duplicateFound = isError || hasDupes;
+      setDuplicateCheckStatus(duplicateFound ? 'duplicate' : 'ok');
+      setDuplicateCheckMessage(
+        duplicateFound
+          ? data.error_msg || data.message || 'Number already exists in CRM.'
+          : 'Number is available.'
+      );
+    } catch (error) {
+      console.error('Duplicate check failed', error);
+      const detail =
+        error.response?.data?.detail ||
+        error.response?.data?.message ||
+        error.message ||
+        'Failed to check number';
+      setDuplicateCheckStatus('error');
+      setDuplicateCheckMessage(detail);
+    } finally {
+      setIsCheckingDuplicate(false);
+    }
+  }, [inquiryNumber, inquiryCountryCode]);
 
   const showMobileBackButton = Boolean(onBackToList) && isMobile;
 
@@ -775,7 +1176,21 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
                               <button
                                 type="button"
                                 onClick={() => {
-                                  setInquiryNumber(phoneMatch);
+                                  const normalizedMatch = phoneMatch.replace(/[^\d+]/g, '');
+                                  if (normalizedMatch.startsWith('+') && countryOptions.length > 0) {
+                                    const matchCountry = countryOptions
+                                      .filter((c) => normalizedMatch.startsWith(c.phonecode))
+                                      .sort((a, b) => b.phonecode.length - a.phonecode.length)[0];
+                                    if (matchCountry) {
+                                      setInquiryCountryCode(matchCountry.phonecode);
+                                      const remainder = normalizedMatch.slice(matchCountry.phonecode.length);
+                                      setInquiryNumber(normalizeLocalPhoneNumber(remainder));
+                                    } else {
+                                      setInquiryNumber(normalizeLocalPhoneNumber(normalizedMatch));
+                                    }
+                                  } else {
+                                    setInquiryNumber(normalizeLocalPhoneNumber(normalizedMatch));
+                                  }
                                   setInquiryNotes(`Inquiry from chat ${chat?.id || ''}`);
                                   setInquiryName(chatDisplayName || '');
                                   setInquiryEmail(
@@ -853,7 +1268,7 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
 
         {/* Message Input */}
         <div className={`composer-shell ${isMobile ? 'rounded-2xl border border-[var(--tg-border-soft)] pb-safe' : ''}`}>
-          {!canSendManualMessage && (
+          {show24hExpiryNotice && (
             <div className="mb-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
               The 24-hour human agent window has expired. Send an approved template or wait for the user to reply.
             </div>
@@ -901,9 +1316,9 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
               disabled={!canSendManualMessage}
               aria-disabled={!canSendManualMessage}
               placeholder={
-                canSendManualMessage
-                  ? 'Type a reply, use / for shortcuts...'
-                  : '24-hour window expired. Use an approved template.'
+                show24hExpiryNotice
+                  ? '24-hour window expired. Use an approved template.'
+                  : 'Type a reply, use / for shortcuts...'
               }
               rows={1}
               style={{ overflow: 'hidden' }}
@@ -916,18 +1331,18 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
             <div className="flex flex-wrap items-center justify-between gap-1.5">
               <div className="composer-toolbar">
                 <div className="relative inline-block" ref={emojiPopoverRef}>
-                  <Button
-                    type="button"
-                    onClick={() => setShowEmojiPicker((prev) => !prev)}
-                    variant="ghost"
-                    className={isMobile ? 'min-w-[36px] min-h-[36px]' : 'h-9 px-3'}
-                    title="Insert emoji"
-                  >
-                    <Smile className="w-4 h-4" />
-                    <span className="hidden sm:inline text-sm">Emoji</span>
-                  </Button>
-                  {showEmojiPicker && (
-                    <div className="emoji-popover">
+                <Button
+                  type="button"
+                  onClick={() => setShowEmojiPicker((prev) => !prev)}
+                  variant="ghost"
+                  className={isMobile ? 'min-w-[36px] min-h-[36px]' : 'h-9 px-3'}
+                  title="Insert emoji"
+                >
+                  <Smile className="w-4 h-4" />
+                  <span className="hidden sm:inline text-sm">Emoji</span>
+                </Button>
+                {showEmojiPicker && (
+                  <div className="emoji-popover">
                       {['😀','😃','😄','😁','😆','😅','😂','🙂','😉','😊','😍','😘','😎','🤩','🤔','🤝','👍','🙏','🔥','🎉','❤️','🚀','🌟','😴','🤖','🥳','🤝','📌','✅','❓','☕'].map((emoji) => (
                         <button
                           key={emoji}
@@ -944,16 +1359,18 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
                     </div>
                   )}
                 </div>
-                <Button
-                  type="button"
-                  onClick={() => setShowAttachmentForm((prev) => !prev)}
-                  variant="ghost"
-                  className={isMobile ? 'min-w-[36px] min-h-[36px]' : 'h-9 px-3'}
-                  title="Add attachment (URL)"
-                >
-                  <Paperclip className="w-4 h-4" />
-                  <span className="hidden sm:inline text-sm">Attach</span>
-                </Button>
+                {attachmentsEnabled && (
+                  <Button
+                    type="button"
+                    onClick={() => setShowAttachmentForm((prev) => !prev)}
+                    variant="ghost"
+                    className={isMobile ? 'min-w-[36px] min-h-[36px]' : 'h-9 px-3'}
+                    title="Add attachment (URL)"
+                  >
+                    <Paperclip className="w-4 h-4" />
+                    <span className="hidden sm:inline text-sm">Attach</span>
+                  </Button>
+                )}
                 <Button
                   type="button"
                   onClick={() => setShowTemplateDialog(true)}
@@ -1093,7 +1510,7 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
                       onClick={handleSendTemplate}
                       disabled={
                         isSending ||
-                        (!canSendManualMessage && !selectedTemplate?.is_meta_approved)
+                        (show24hExpiryNotice && !selectedTemplate?.is_meta_approved)
                       }
                       className="bg-purple-600 hover:bg-purple-700"
                     >
@@ -1101,7 +1518,7 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
                       Send Template
                     </Button>
                   </div>
-                  {!canSendManualMessage && !selectedTemplate?.is_meta_approved && (
+                  {show24hExpiryNotice && !selectedTemplate?.is_meta_approved && (
                     <p className="text-xs text-amber-300 text-right">
                       Meta-approved templates are required outside the 24-hour window.
                     </p>
@@ -1120,23 +1537,120 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-3">
-              <div className="grid sm:grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <label className="text-xs text-[var(--tg-text-secondary)]">Name</label>
-                  <Input
-                    value={inquiryName}
-                    onChange={(e) => setInquiryName(e.target.value)}
-                    placeholder="Contact name"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-xs text-[var(--tg-text-secondary)]">Phone number</label>
+              <div className="space-y-1">
+                <label className="text-xs text-[var(--tg-text-secondary)]">Name</label>
+                <Input
+                  value={inquiryName}
+                  onChange={(e) => setInquiryName(e.target.value)}
+                  placeholder="Contact name"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs text-[var(--tg-text-secondary)]">Phone number</label>
+                <div className="flex gap-2 flex-wrap items-center">
+                  {hasCountryOptions ? (
+                    <Select
+                      value={inquiryCountryCode}
+                      onValueChange={(value) => {
+                        setCountryCodeManuallySet(true);
+                        setInquiryCountryCode(normalizeCountryCode(value));
+                      }}
+                    >
+                      <SelectTrigger className="w-48" aria-busy={isLoadingCountries}>
+                        <SelectValue placeholder={isLoadingCountries ? 'Loading...' : 'Select country'} />
+                      </SelectTrigger>
+                      <SelectContent className="bg-[var(--tg-surface)] border-[var(--tg-border-soft)] max-h-72">
+                        {countryOptions.map((country) => (
+                          <SelectItem
+                            key={country.id || country.phonecode}
+                            value={country.phonecode}
+                            className="text-sm"
+                          >
+                            {country.name} ({country.phonecode})
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  ) : (
+                    <Input
+                      value={inquiryCountryCode}
+                      onChange={(e) => {
+                        setCountryCodeManuallySet(true);
+                        setInquiryCountryCode(normalizeCountryCode(e.target.value));
+                      }}
+                      inputMode="tel"
+                      autoComplete="tel-country-code"
+                      className="w-32"
+                      placeholder={isLoadingCountries ? 'Loading...' : '+1'}
+                    />
+                  )}
                   <Input
                     value={inquiryNumber}
-                    onChange={(e) => setInquiryNumber(e.target.value)}
-                    autoComplete="off"
+                    onChange={(e) => setInquiryNumber(normalizeLocalPhoneNumber(e.target.value))}
+                    inputMode="tel"
+                    autoComplete="tel-national"
+                    placeholder="5551234567"
+                    className={cn(
+                      'flex-1 min-w-[220px]',
+                      phoneValidationStatus === 'invalid' || inquiryPhoneError
+                        ? 'border-red-500 focus-visible:ring-red-500 focus-visible:border-red-500'
+                        : ''
+                    )}
                   />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={handleCheckDuplicate}
+                    disabled={
+                      isCheckingDuplicate ||
+                      !normalizeLocalPhoneNumber(inquiryNumber) ||
+                      isPhoneInvalid ||
+                      !inquiryPhoneIsValid
+                    }
+                    className="h-10 w-10 p-0 flex items-center justify-center"
+                    title="Check duplicate"
+                  >
+                    {isCheckingDuplicate ? (
+                      <span className="text-xs">...</span>
+                    ) : (
+                      <Search className="w-4 h-4" />
+                    )}
+                  </Button>
                 </div>
+                {!phoneValidationMessage && inquiryPhoneError && (
+                  <p className="text-xs text-amber-400">{inquiryPhoneError}</p>
+                )}
+                {!inquiryPhoneError && normalizedInquiryPhone && (
+                  <p className="text-[11px] text-[var(--tg-text-muted)]">
+                    Will save as {normalizedInquiryPhone}
+                  </p>
+                )}
+                {duplicateCheckMessage && (
+                  <p
+                    className={`text-xs ${
+                      duplicateCheckStatus === 'duplicate'
+                        ? 'text-amber-400'
+                        : duplicateCheckStatus === 'ok'
+                          ? 'text-emerald-300'
+                          : 'text-amber-400'
+                    }`}
+                  >
+                    {duplicateCheckMessage}
+                  </p>
+                )}
+                {phoneValidationMessage && (
+                  <p
+                    className={`text-xs ${
+                      phoneValidationStatus === 'valid'
+                        ? 'text-emerald-300'
+                        : 'text-amber-400'
+                    }`}
+                  >
+                    {isValidatingPhone ? 'Validating...' : phoneValidationMessage}
+                  </p>
+                )}
+              </div>
+              <div className="grid sm:grid-cols-2 gap-3">
                 <div className="space-y-1">
                   <label className="text-xs text-[var(--tg-text-secondary)]">Email</label>
                   <Input
@@ -1197,7 +1711,8 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
               </Button>
               <Button
                 className="bg-gradient-to-r from-purple-500 via-pink-500 to-orange-400 text-white"
-                onClick={() => setShowInquiryModal(false)}
+                onClick={handleCreateInquiry}
+                disabled={!canCreateInquiry}
               >
                 Create inquiry
               </Button>
@@ -1221,7 +1736,7 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
               lastActivityLabel={lastActivityLabel}
             />
                 </div>
-                {showAttachmentForm && (
+                {attachmentsEnabled && showAttachmentForm && (
                   <div className="attachment-form">
                     <div className="flex flex-col gap-2">
                       <label className="text-xs text-[var(--tg-text-secondary)]">Attachment URL</label>

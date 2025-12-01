@@ -68,6 +68,7 @@ from schemas import (
     InstagramCommentSchema,
     InstagramInsightSchema,
 )
+from pydantic import BaseModel
 from auth import verify_password, get_password_hash, create_access_token, decode_access_token
 from facebook_api import facebook_client, FacebookMode
 from instagram_api import instagram_client, InstagramMode
@@ -87,6 +88,16 @@ from routes import auth as auth_routes
 from routes import users as user_routes
 from routes.chat_helpers import reassign_chats_from_inactive_agents
 from routes.dependencies import get_current_user, get_admin_user, get_admin_only_user, require_super_admin, require_permissions, require_any_permissions, _annotate_user, normalize_email
+
+try:
+    import phonenumbers
+    from phonenumbers.phonenumberutil import NumberParseException, region_code_for_number
+    from phonenumbers import PhoneNumberFormat
+except ImportError:  # pragma: no cover
+    phonenumbers = None
+    NumberParseException = Exception
+    region_code_for_number = lambda x: None  # type: ignore
+    PhoneNumberFormat = None
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -114,6 +125,15 @@ from settings import (
     PASSWORD_RESET_EMAIL_SUBJECT,
     PASSWORD_RESET_TOKEN_LIFETIME_MINUTES,
 )
+
+class DuplicateMobileCheckRequest(BaseModel):
+    mobile: str
+    country_code: Optional[str] = None
+    not_in_group: Optional[str] = None
+
+class PhoneValidationRequest(BaseModel):
+    country_code: str
+    phone_number: str
 
 
 def _message_model_for_platform(platform: MessagePlatform) -> Type[ChatMessageModel]:
@@ -212,13 +232,180 @@ api_router = APIRouter(prefix="/api")
 def healthcheck():
     return {"status": "ok"}
 
+@api_router.post("/admin/check-duplicate-mobile")
+def check_duplicate_mobile(
+    payload: DuplicateMobileCheckRequest,
+    current_user: User = Depends(get_current_user),
+):
+    admin_url = os.environ.get("ADMIN_URL")
+    form_token = os.environ.get("FORM_TOKEN")
+    uid = os.environ.get("UID")
+    bid = os.environ.get("BID")
+
+    if not admin_url or not form_token or not uid or not bid:
+        raise HTTPException(status_code=500, detail="Duplicate check config missing in environment")
+
+    target = admin_url.rstrip("/") + "/routes/contactRoute.php?action=checkDuplicateMobile"
+
+    data = {
+        "form_token": form_token,
+        "mobile": payload.mobile,
+        "country_code": payload.country_code or "",
+        "bid": bid,
+    }
+    if payload.not_in_group:
+        data["not_in_group"] = payload.not_in_group
+
+    headers = {
+        "uid": uid,
+        "bid": bid,
+        "Content-Type": "application/json",
+    }
+    admin_cookie = os.environ.get("ADMIN_COOKIE")
+    if admin_cookie:
+        headers["Cookie"] = admin_cookie
+
+    try:
+        resp = requests.post(
+          target,
+          json=data,
+          headers=headers,
+          timeout=10,
+        )
+        if resp.status_code >= 400:
+            logging.warning("Duplicate mobile check bad status %s: %s", resp.status_code, resp.text)
+            raise HTTPException(status_code=resp.status_code, detail="Failed to check duplicate mobile")
+        try:
+            return resp.json()
+        except ValueError:
+            logging.warning("Duplicate mobile check non-JSON response: %s", resp.text)
+            return {"data": [], "error": 1, "error_msg": "Invalid response from admin", "raw": resp.text}
+    except requests.RequestException as exc:
+        logging.exception("Duplicate mobile check failed: %s", exc)
+        raise HTTPException(status_code=502, detail="Failed to check duplicate mobile")
+
+@api_router.post("/validate-phone")
+def validate_phone(request: PhoneValidationRequest):
+    if phonenumbers is None:
+        # Graceful fallback if dependency is missing
+        return {
+            "valid": False,
+            "possible": False,
+            "region": None,
+            "formatted": {
+                "e164": None,
+                "international": None,
+                "national": None,
+            },
+            "input": {
+                "country_code": request.country_code,
+                "phone_number": request.phone_number,
+                "combined": f"{request.country_code or ''}{request.phone_number or ''}",
+            },
+            "message": "Phone validation unavailable (phonenumbers not installed on server)",
+        }
+
+    cc = (request.country_code or "").strip()
+    number = (request.phone_number or "").strip()
+    if not cc.startswith("+"):
+        cc = f"+{cc}"
+    full = f"{cc}{number}"
+    try:
+        parsed = phonenumbers.parse(full, None)
+    except NumberParseException as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:  # safety net
+        logging.exception("Phone validation unexpected error: %s", exc)
+        raise HTTPException(status_code=400, detail="Unable to parse phone number")
+
+    is_possible = phonenumbers.is_possible_number(parsed)
+    is_valid = phonenumbers.is_valid_number(parsed)
+    region = region_code_for_number(parsed)
+    e164 = phonenumbers.format_number(parsed, PhoneNumberFormat.E164) if is_valid else None
+    international = phonenumbers.format_number(parsed, PhoneNumberFormat.INTERNATIONAL) if is_valid else None
+    national = phonenumbers.format_number(parsed, PhoneNumberFormat.NATIONAL) if is_valid else None
+
+    return {
+        "valid": bool(is_valid),
+        "possible": bool(is_possible),
+        "region": region,
+        "formatted": {
+            "e164": e164,
+            "international": international,
+            "national": national,
+        },
+        "input": {
+            "country_code": cc,
+            "phone_number": number,
+            "combined": full,
+        },
+        "message": "Valid" if is_valid else "Invalid phone number",
+    }
+
+@api_router.get("/countries")
+def list_countries(db: Session = Depends(get_db)):
+    """
+    Lightweight country list sourced from the database for dialing code selection.
+    Uses MYSQL_DATABASE_TickleRight schema when provided.
+    """
+    tickle_db = os.environ.get("MYSQL_DATABASE_TickleRight") or os.environ.get("MYSQL_DATABASE_TICKLERIGHT")
+    safe_db = re.sub(r"[^A-Za-z0-9_]", "", tickle_db or "")
+    table_ref = f"`{safe_db}`.countries" if safe_db else "countries"
+
+    sql = text(
+        f"""
+        SELECT id, name, iso2, phonecode, timezones
+        FROM {table_ref}
+        WHERE phonecode IS NOT NULL AND phonecode <> ''
+        ORDER BY name ASC
+        """
+    )
+    try:
+        rows = db.execute(sql).fetchall()
+    except Exception as exc:
+        logging.exception("Failed to fetch countries: %s", exc)
+        raise HTTPException(status_code=500, detail="Failed to load countries")
+
+    countries = []
+    for row in rows:
+        data = row._mapping if hasattr(row, "_mapping") else row
+        phonecode_raw = str(data.get("phonecode") or "").strip()
+        digits = "".join(ch for ch in phonecode_raw if ch.isdigit())
+        if not digits:
+            continue
+        timezones_raw = data.get("timezones")
+        try:
+            tz_list = json.loads(timezones_raw) if isinstance(timezones_raw, str) else timezones_raw
+            if isinstance(tz_list, dict) and "zone_name" in tz_list:
+                tz_list = [tz_list]
+        except Exception:
+            tz_list = []
+
+        zone_names = []
+        if isinstance(tz_list, list):
+            for tz in tz_list:
+                if isinstance(tz, dict) and tz.get("zone_name"):
+                    zone_names.append(str(tz["zone_name"]))
+                elif isinstance(tz, str):
+                    zone_names.append(tz)
+
+        countries.append(
+            {
+                "id": str(data.get("id")),
+                "name": data.get("name"),
+                "iso2": (data.get("iso2") or "").upper(),
+                "phonecode": f"+{digits}",
+                "timezones": zone_names,
+            }
+        )
+    return countries
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
-
 
 def _sanitize_path_component(value: Optional[str], fallback: str = "item") -> str:
     if not value:
