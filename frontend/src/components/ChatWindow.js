@@ -885,13 +885,14 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
         { headers: token ? { Authorization: `Bearer ${token}` } : undefined }
       );
       const data = resp.data || {};
+      console.log('Duplicate check response data:', data);
       const isError = Number(data.error) === 1;
       const hasDupes = Array.isArray(data.data) && data.data.length > 0;
       const duplicateFound = isError || hasDupes;
       setDuplicateCheckStatus(duplicateFound ? 'duplicate' : 'ok');
       setDuplicateCheckMessage(
         duplicateFound
-          ? data.error_msg || data.message || 'Number already exists in CRM.'
+          ?data.message || data.error_msg || 'Number already exists in CRM.'
           : 'Number is available.'
       );
     } catch (error) {
@@ -1622,7 +1623,7 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
                 )}
                 {!inquiryPhoneError && normalizedInquiryPhone && (
                   <p className="text-[11px] text-[var(--tg-text-muted)]">
-                    Will save as {normalizedInquiryPhone}
+                    {/* Will save as {normalizedInquiryPhone} */}
                   </p>
                 )}
                 {duplicateCheckMessage && (
@@ -1649,6 +1650,27 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
                     {isValidatingPhone ? 'Validating...' : phoneValidationMessage}
                   </p>
                 )}
+                <div className="pt-1">
+                  {hasDuplicateCheck && (<Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="px-3 text-xs"
+                  >
+                    Assigned to (Agent ID)
+                  </Button>
+                  )}
+                  {hasDuplicateCheck && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="ml-2 px-3 text-xs"
+                    >
+                    Assigned to Me
+                    </Button>
+                  )}
+                </div>
               </div>
               <div className="grid sm:grid-cols-2 gap-3">
                 <div className="space-y-1">

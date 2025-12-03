@@ -96,6 +96,7 @@ class User(Base):
     instagram_accounts = relationship("InstagramAccount", back_populates="user", cascade="all, delete-orphan")
     assigned_chats = relationship("Chat", back_populates="assigned_agent", foreign_keys="Chat.assigned_to")
     position = relationship("Position", back_populates="users")
+    status_logs = relationship("UserStatusLog", back_populates="user", cascade="all, delete-orphan")
 
 
 class PasswordResetToken(Base):
@@ -275,6 +276,31 @@ class FacebookPage(Base):
     updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
     
     user = relationship("User", backref="facebook_pages")
+    status_logs = relationship("FacebookPageStatusLog", back_populates="page", cascade="all, delete-orphan")
+
+class FacebookPageStatusLog(Base):
+    __tablename__ = "facebook_page_status_logs"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    page_id = Column(String(255), ForeignKey("facebook_pages.page_id"), nullable=False, index=True)
+    changed_by = Column(String(255), nullable=False)
+    changed_to = Column(Boolean, nullable=False)
+    changed_at = Column(DateTime(timezone=True), default=utc_now)
+    note = Column(Text, nullable=True)
+
+    page = relationship("FacebookPage", back_populates="status_logs", foreign_keys=[page_id])
+
+class UserStatusLog(Base):
+    __tablename__ = "user_status_logs"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String(36), ForeignKey("users.id"), nullable=False, index=True)
+    changed_by = Column(String(255), nullable=False)
+    changed_to = Column(Boolean, nullable=False)
+    changed_at = Column(DateTime(timezone=True), default=utc_now)
+    note = Column(Text, nullable=True)
+
+    user = relationship("User", back_populates="status_logs", foreign_keys=[user_id])
 
 class MessageTemplate(Base):
     __tablename__ = "message_templates"

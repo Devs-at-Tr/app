@@ -42,7 +42,23 @@ const LoginPage = ({ onLogin, allowPublicSignup = false, forgotPasswordEnabled =
         identifier,
         password
       });
-      onLogin(response.data.user, response.data.access_token);
+      const { user: loggedInUser, access_token: token } = response.data;
+      if (loggedInUser?.emp_id) {
+        try {
+          await axios.post(
+            `${API}/selectEmployee`,
+            null,
+            {
+              headers: { Authorization: `Bearer ${token}` },
+              params: { employee_id: loggedInUser.emp_id }
+            }
+          );
+        } catch (selectError) {
+          // Do not block login if the employee selection call fails
+          console.warn('selectEmployee request skipped or failed:', selectError);
+        }
+      }
+      onLogin(loggedInUser, token);
     } catch (err) {
       const detail = err.response?.data?.detail;
       let message = 'Login failed. Please try again.';

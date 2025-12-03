@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from auth import get_password_hash
 from database import get_db
-from models import Chat, Position, User, UserRole
+from models import Chat, Position, User, UserRole, UserStatusLog
 from permissions import (
     DEFAULT_POSITION_SLUGS,
     PermissionCode,
@@ -152,6 +152,7 @@ def update_user_active_state(
             if not remaining_super_admins:
                 raise HTTPException(status_code=400, detail="Cannot deactivate the only super admin")
 
+    old_status = user.is_active
     user.is_active = payload.is_active
     db.commit()
     if user.role == UserRole.AGENT and user.is_active is False:
@@ -160,6 +161,21 @@ def update_user_active_state(
         except Exception:
             pass
     db.refresh(user)
+
+    if old_status != payload.is_active:
+        try:
+            log_entry = UserStatusLog(
+                user_id=user.id,
+                changed_by=current_user.email or current_user.id,
+                changed_to=payload.is_active,
+                note=f"Status changed from {old_status} to {payload.is_active}",
+            )
+            db.add(log_entry)
+            db.commit()
+        except Exception:
+            db.rollback()
+            # Do not block the response; logging is best-effort
+            pass
     return UserResponse.model_validate(_annotate_user(user))
 
 

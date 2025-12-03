@@ -77,7 +77,11 @@ const ProfilePage = ({ user, onLogout }) => {
   );
 
   const loadRosterEntry = useCallback(async () => {
-    if (!user?.id) return;
+    if (!user?.id || !canViewUserRoster) {
+      setAssignedChats(0);
+      setLoadingRoster(false);
+      return;
+    }
     setLoadingRoster(true);
     try {
       const token = localStorage.getItem('token');
@@ -97,7 +101,7 @@ const ProfilePage = ({ user, onLogout }) => {
     } finally {
       setLoadingRoster(false);
     }
-  }, [user]);
+  }, [canViewUserRoster, user]);
 
   useEffect(() => {
     loadRosterEntry();

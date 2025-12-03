@@ -75,14 +75,22 @@ const FacebookPageManager = ({ onClose }) => {
     }
   };
 
-  const handleToggleActive = async (pageId, currentStatus) => {
+  const handleToggleActive = async (pageId, currentStatus, pageName) => {
+    const nextState = !currentStatus;
+    const actionLabel = nextState ? 'activate' : 'deactivate';
+    const confirmed = window.confirm(
+      `Are you sure you want to ${actionLabel} "${pageName || pageId}"?`
+    );
+    if (!confirmed) return;
+
     try {
       const token = localStorage.getItem('token');
       await axios.patch(
         `${API}/facebook/pages/${pageId}`,
-        { is_active: !currentStatus },
+        { is_active: nextState },
         { headers: { Authorization: `Bearer ${token}` } }
       );
+      setSuccess(`Page ${pageName || pageId} ${nextState ? 'activated' : 'deactivated'}.`);
       loadPages();
     } catch (error) {
       console.error('Error toggling page status:', error);
@@ -265,7 +273,7 @@ const FacebookPageManager = ({ onClose }) => {
                         <span className="text-sm text-gray-400">Active</span>
                         <Switch
                           checked={page.is_active}
-                          onCheckedChange={() => handleToggleActive(page.page_id, page.is_active)}
+                          onCheckedChange={() => handleToggleActive(page.page_id, page.is_active, page.page_name)}
                           className="data-[state=checked]:bg-blue-600"
                         />
                       </div>

@@ -25,6 +25,12 @@ const UserDirectoryPage = ({ user, onLogout }) => {
   const [positions, setPositions] = useState([]);
   const [positionsLoading, setPositionsLoading] = useState(false);
   const [error, setError] = useState('');
+  const [confirmToggle, setConfirmToggle] = useState({
+    open: false,
+    userId: null,
+    userName: '',
+    nextState: true,
+  });
   const [resetModal, setResetModal] = useState({
     open: false,
     userId: null,
@@ -123,25 +129,37 @@ const UserDirectoryPage = ({ user, onLogout }) => {
   }, [loadPositions]);
 
   const handleToggleActive = useCallback(
-    async (userId, isActive) => {
-      try {
-        const token = localStorage.getItem('token');
-        if (!token) {
-          throw new Error('No authentication token found');
-        }
-        await axios.patch(
-          `${API}/users/${userId}/active`,
-          { is_active: isActive },
-          { headers: { Authorization: `Bearer ${token}` }, timeout: 30000 }
-        );
-        await loadUserRoster();
-      } catch (toggleError) {
-        console.error('Error updating user status:', toggleError);
-        setError(toggleError.response?.data?.detail || toggleError.message || 'Unable to update user');
-      }
+    (userId, isActive, userName) => {
+      setConfirmToggle({
+        open: true,
+        userId,
+        userName: userName || 'this user',
+        nextState: isActive,
+      });
     },
-    [loadUserRoster]
+    []
   );
+
+  const confirmToggleAction = useCallback(async () => {
+    if (!confirmToggle.userId) return;
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        throw new Error('No authentication token found');
+      }
+      await axios.patch(
+        `${API}/users/${confirmToggle.userId}/active`,
+        { is_active: confirmToggle.nextState },
+        { headers: { Authorization: `Bearer ${token}` }, timeout: 30000 }
+      );
+      setConfirmToggle({ open: false, userId: null, userName: '', nextState: true });
+      await loadUserRoster();
+    } catch (toggleError) {
+      console.error('Error updating user status:', toggleError);
+      setError(toggleError.response?.data?.detail || toggleError.message || 'Unable to update user');
+      setConfirmToggle({ open: false, userId: null, userName: '', nextState: true });
+    }
+  }, [confirmToggle, loadUserRoster]);
 
   const handleAssignPosition = useCallback(
     async (userId, positionId) => {
@@ -219,6 +237,29 @@ const UserDirectoryPage = ({ user, onLogout }) => {
         description="Monitor your team, spot workload spikes, and jump into assignments."
       >
         <div className="flex-1 overflow-y-auto space-y-4">
+          <AlertDialog open={confirmToggle.open} onOpenChange={(open) => !open && setConfirmToggle({ open: false, userId: null, userName: '', nextState: true })}>
+            <AlertDialogContent className="bg-[var(--tg-surface)] border border-[var(--tg-border-soft)] text-[var(--tg-text-primary)]">
+              <AlertDialogHeader>
+                <AlertDialogTitle>{confirmToggle.nextState ? 'Activate user?' : 'Deactivate user?'}</AlertDialogTitle>
+                <AlertDialogDescription className="text-[var(--tg-text-muted)]">
+                  Are you sure you want to {confirmToggle.nextState ? 'activate' : 'deactivate'}{' '}
+                  <strong>{confirmToggle.userName}</strong>?
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel className="bg-transparent border border-[var(--tg-border-soft)] text-[var(--tg-text-primary)]">
+                  Cancel
+                </AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={confirmToggleAction}
+                  className="bg-gradient-to-r from-purple-500 via-pink-500 to-orange-400 text-white"
+                >
+                  Yes, {confirmToggle.nextState ? 'activate' : 'deactivate'}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+
           <AlertDialog open={resetModal.open} onOpenChange={(open) => !open && closeResetModal()}>
             <AlertDialogContent className="bg-[var(--tg-surface)] border border-[var(--tg-border-soft)] text-[var(--tg-text-primary)]">
               <AlertDialogHeader>

@@ -33,7 +33,7 @@ database_url = get_database_url()
 
 if database_url and (database_url.startswith('mysql') or database_url.startswith('postgresql')):
     try:
-        engine = create_engine(database_url, echo=False)
+        engine = create_engine(database_url,pool_pre_ping=True, pool_recycle=3600, echo=False)
         engine.connect()
         db_name = 'MySQL' if DB_TYPE == 'mysql' else 'PostgreSQL'
         print(f"[OK] Connected to {db_name} database")
@@ -55,5 +55,10 @@ def get_db():
     db = SessionLocal()
     try:
         yield db
+        # Optionally commit here if you want auto-commit on success:
+        # db.commit()
+    except:
+        db.rollback()
+        raise
     finally:
         db.close()

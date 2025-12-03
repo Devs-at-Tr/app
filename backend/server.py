@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, Depends, HTTPException, status, Header, Request, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, APIRouter, Depends, HTTPException, status, Header, Request, Query, WebSocket, WebSocketDisconnect, Response
 from starlette.websockets import WebSocketState
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -19,6 +19,7 @@ from urllib.parse import urlparse
 import re
 import requests
 import hashlib
+import uuid
 from database import engine, get_db, Base, SessionLocal
 from utils.timezone import utc_now
 from migrations.runner import run_all_migrations as ensure_instagram_profile_schema
@@ -31,6 +32,7 @@ from models import (
     MessageSender,
     MessageType,
     FacebookPage,
+    FacebookPageStatusLog,
     FacebookUser,
     FacebookMessage,
     MessagePlatform,
@@ -284,6 +286,65 @@ def check_duplicate_mobile(
         logging.exception("Duplicate mobile check failed: %s", exc)
         raise HTTPException(status_code=502, detail="Failed to check duplicate mobile")
 
+
+@api_router.post("/selectEmployee")
+async def select_employee(
+    response: Response,
+    employee_id: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Select an employee for the current user. If employee_id is not provided,
+    use the current user's emp_id. If none exists, do nothing.
+    """
+    emp = employee_id or getattr(current_user, "emp_id", None)
+    if not emp:
+        raise HTTPException(status_code=400, detail="Employee ID not available for this user")
+
+    admin_url = os.environ.get("ADMIN_URL")
+    form_token = os.environ.get("FORM_TOKEN")
+    uid = os.environ.get("UID")
+    bid = os.environ.get("BID")
+
+    if not admin_url or not form_token or not uid or not bid:
+        raise HTTPException(status_code=500, detail="Employee selection config missing in environment")
+
+    target = admin_url.rstrip("/") + "/routes/employeeRoute.php?action=select"
+    data = {
+        "form_token": form_token,
+        "col": ["id", "user_id"],
+        "filter": [["emp_id", "=", emp]],
+        "groupby": "emp_id",
+    }
+
+    headers = {
+        "uid": uid,
+        "bid": bid,
+        "Content-Type": "application/json",
+    }
+    admin_cookie = os.environ.get("ADMIN_COOKIE")
+    if admin_cookie:
+        headers["Cookie"] = admin_cookie
+
+    try:
+        resp = requests.post(
+            target,
+            json=data,
+            headers=headers,
+            timeout=10,
+        )
+        if resp.status_code >= 400:
+            logging.warning("Select employee bad status %s: %s", resp.status_code, resp.text)
+            raise HTTPException(status_code=resp.status_code, detail="Failed to select employee")
+        result = resp.json()
+        # Stash in session via cookie for downstream use
+        if response is not None:
+            response.set_cookie(key="selected_employee_id", value=emp, httponly=False, samesite="Lax")
+        return result
+    except requests.RequestException as exc:
+        logging.exception("Select employee failed: %s", exc)
+        raise HTTPException(status_code=502, detail="Failed to select employee")
+    
 @api_router.post("/validate-phone")
 def validate_phone(request: PhoneValidationRequest):
     if phonenumbers is None:
@@ -3721,7 +3782,9 @@ def update_facebook_page(
     page = db.query(FacebookPage).filter(FacebookPage.page_id == page_id).first()
     if not page:
         raise HTTPException(status_code=404, detail="Facebook page not found")
-    
+
+    old_status = page.is_active
+
     if page_update.page_name is not None:
         page.page_name = page_update.page_name
     if page_update.access_token is not None:
@@ -3732,8 +3795,28 @@ def update_facebook_page(
     page.updated_at = utc_now()
     db.commit()
     db.refresh(page)
-    
-    logger.info(f"Updated Facebook page: {page_id}")
+
+    # Persist status change log
+    if page_update.is_active is not None and old_status != page_update.is_active:
+        try:
+            log_entry = FacebookPageStatusLog(
+                page_id=page.page_id,
+                changed_by=current_user.email or current_user.id,
+                changed_to=page_update.is_active,
+                note=f"Status changed from {old_status} to {page_update.is_active}",
+            )
+            db.add(log_entry)
+            db.commit()
+        except Exception as exc:
+            logger.error("Failed to log page status change: %s", exc)
+
+    logger.info(
+        "Updated Facebook page %s is_active=%s by user=%s (%s)",
+        page_id,
+        page.is_active,
+        current_user.id,
+        current_user.email or current_user.name,
+    )
     return page
 
 @api_router.delete("/facebook/pages/{page_id}")

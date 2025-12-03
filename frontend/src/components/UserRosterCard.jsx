@@ -166,7 +166,7 @@ const UserRosterCard = ({
                         <span>Active</span>
                         <Switch
                           checked={user.is_active !== false}
-                          onCheckedChange={(checked) => onToggleActive?.(user.id, checked)}
+                          onCheckedChange={(checked) => onToggleActive?.(user.id, checked, user.name)}
                         />
                       </div>
                     )}
