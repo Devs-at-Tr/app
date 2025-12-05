@@ -41,6 +41,7 @@ const ChatSidebar = ({
   hideHeader = false,
   searchQuery: controlledSearch,
   onSearchQueryChange,
+  showAssignmentInfo = true,
 }) => {
   const [localSearch, setLocalSearch] = useState('');
   const searchQuery = controlledSearch ?? localSearch;
@@ -204,7 +205,7 @@ const ChatSidebar = ({
                     )}
                   </div>
                   <p className="text-[12px] text-gray-400 truncate leading-snug">{chat.last_message || 'No messages'}</p>
-                  {!isCompactList && (
+                  {showAssignmentInfo && !isCompactList && (
                     <p className="text-[11px] text-purple-400 mt-0.5">
                       {chat.assigned_agent ? `Assigned: ${chat.assigned_agent.name}` : 'Unassigned'}
                     </p>
@@ -232,12 +233,14 @@ const ChatSidebar = ({
                         Chat details
                       </DropdownMenuLabel>
                       <DropdownMenuSeparator className="bg-[var(--tg-border-soft)]" />
-                      <DropdownMenuItem className="flex flex-col items-start gap-0.5 focus:bg-transparent" onSelect={(event) => event.preventDefault()}>
-                        <span className="text-sm">
-                          {chat.assigned_agent?.name || 'Unassigned'}
-                        </span>
-                        <span className="text-xs text-[var(--tg-text-muted)]">Assigned agent</span>
-                      </DropdownMenuItem>
+                      {showAssignmentInfo && (
+                        <DropdownMenuItem className="flex flex-col items-start gap-0.5 focus:bg-transparent" onSelect={(event) => event.preventDefault()}>
+                          <span className="text-sm">
+                            {chat.assigned_agent?.name || 'Unassigned'}
+                          </span>
+                          <span className="text-xs text-[var(--tg-text-muted)]">Assigned agent</span>
+                        </DropdownMenuItem>
+                      )}
                       {lastActivityLabel && (
                         <DropdownMenuItem className="flex flex-col items-start gap-0.5 focus:bg-transparent" onSelect={(event) => event.preventDefault()}>
                           <span className="text-sm">{lastActivityLabel}</span>

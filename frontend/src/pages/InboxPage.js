@@ -79,6 +79,10 @@ const InboxContent = ({ user, onLogout }) => {
     () => hasAnyPermission(user, ['chat:view:team', 'chat:view:all']),
     [user]
   );
+  const showAssignmentInfo = useMemo(
+    () => canAssignChats || canViewAllChats,
+    [canAssignChats, canViewAllChats]
+  );
 
   const navigationItems = useMemo(
     () =>
@@ -388,6 +392,7 @@ const InboxContent = ({ user, onLogout }) => {
             hideHeader={false}
             searchQuery={chatSearchQuery}
             onSearchQueryChange={setChatSearchQuery}
+            showAssignmentInfo={showAssignmentInfo}
           />
         </div>
       ) : (
@@ -399,6 +404,8 @@ const InboxContent = ({ user, onLogout }) => {
             agents={agents}
             userRole={user.role}
             canAssignChats={canAssignChats}
+            showAssignmentInfo={showAssignmentInfo}
+            currentUser={user}
             onBackToList={() => setMobileView('list')}
           />
         </div>
@@ -412,19 +419,20 @@ const InboxContent = ({ user, onLogout }) => {
     <InboxWorkspace
       className="flex-1 min-h-0"
       listColumn={
-        <ChatSidebar
-          chats={chats}
-          selectedChatId={selectedChat?.id}
-          onSelectChat={handleSelectChat}
-          selectedPlatform={selectedPlatform}
-          loading={chatsLoading}
-          hideHeader
-          searchQuery={chatSearchQuery}
-          onSearchQueryChange={setChatSearchQuery}
-        />
-      }
-      conversationColumn={
-        <div className="rounded-2xl border border-[var(--tg-border-soft)] bg-[var(--tg-surface)] h-full flex flex-1 overflow-hidden">
+          <ChatSidebar
+            chats={chats}
+            selectedChatId={selectedChat?.id}
+            onSelectChat={handleSelectChat}
+            selectedPlatform={selectedPlatform}
+            loading={chatsLoading}
+            hideHeader
+            searchQuery={chatSearchQuery}
+            onSearchQueryChange={setChatSearchQuery}
+            showAssignmentInfo={showAssignmentInfo}
+          />
+        }
+        conversationColumn={
+          <div className="rounded-2xl border border-[var(--tg-border-soft)] bg-[var(--tg-surface)] h-full flex flex-1 overflow-hidden">
           <ChatWindow
             chat={selectedChat}
             onSendMessage={handleSendMessage}
@@ -432,6 +440,8 @@ const InboxContent = ({ user, onLogout }) => {
             agents={agents}
             userRole={user.role}
             canAssignChats={canAssignChats}
+            showAssignmentInfo={showAssignmentInfo}
+            currentUser={user}
           />
         </div>
       }

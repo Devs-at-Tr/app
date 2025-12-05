@@ -2813,7 +2813,7 @@ async def _handle_instagram_webhook(request: Request, db: Session) -> Dict[str, 
                     attachments_json=json.dumps(attachments) if attachments else None,
                     ts=timestamp_seconds,
                     created_at=event_datetime,
-                    raw_payload_json=raw_message_json,
+                    raw_payload_json=json.dumps(messaging_event),
                     is_ticklegram=is_ticklegram_event,
                     metadata_json=referral_metadata_json
                 )
@@ -3907,20 +3907,17 @@ def update_template(
         template.platform = template_data.platform
         
     # Don't allow manual updates of Meta approval status
-    if hasattr(template_data, 'is_meta_approved') or hasattr(template_data, 'meta_template_id'):
+    if (
+        template_data.is_meta_approved is not None
+        or template_data.meta_template_id is not None
+        or template_data.meta_submission_id is not None
+        or template_data.meta_submission_status is not None
+    ):
         raise HTTPException(
             status_code=400,
             detail="Meta approval status and template ID can only be updated through the Meta approval process"
         )
 
-    if template.is_meta_approved and not template.meta_template_id:
-        raise HTTPException(
-            status_code=400,
-                detail="Invalid Meta template ID format. Must start with 'meta_'"
-            )
-        template.meta_template_id = template_data.meta_template_id
-        template.is_meta_approved = True  # Auto-approve if valid Meta template ID is provided
-    
     template.updated_at = utc_now()
     db.commit()
     db.refresh(template)
@@ -4369,6 +4366,8 @@ async def handle_facebook_webhook(request: Request, db: Session = Depends(get_db
                             fb_extra_meta["referral"] = fb_referral_payload
                         if processed.get("message_id"):
                             fb_extra_meta["facebook_mid"] = processed.get("message_id")
+                        # include full raw webhook payload
+                        fb_extra_meta["raw_webhook"] = messaging_event
                         fb_metadata_json = _merge_message_metadata(
                             None,
                             extra=fb_extra_meta or None
@@ -4541,6 +4540,44 @@ async def handle_facebook_webhook(request: Request, db: Session = Depends(get_db
         logger.error(f"Error processing Facebook webhook: {e}")
         # Return 200 to avoid Facebook retrying
         return {"status": "error", "message": str(e)}
+
+# --- Chat assignment helpers ---
+class AssignChatByEmployeeRequest(BaseModel):
+    chat_id: str
+    employee_id: str
+
+
+@api_router.post("/admin/assign-chat")
+def assign_chat_by_employee(
+    payload: AssignChatByEmployeeRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Assign a chat to an agent resolved by employee_id.
+    Agents and admins can use this to route inquiries back to their owner.
+    """
+    chat = db.query(Chat).filter(Chat.id == payload.chat_id).first()
+    if not chat:
+        raise HTTPException(status_code=404, detail="Chat not found")
+
+    agent = (
+        db.query(User)
+        .options(joinedload(User.position))
+        .filter(func.lower(User.emp_id) == payload.employee_id.strip().lower())
+        .first()
+    )
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found for employee_id")
+    if not _is_assignable_agent(agent):
+        raise HTTPException(status_code=400, detail="Agent is inactive")
+
+    chat.assigned_to = agent.id
+    chat.status = ChatStatus.ASSIGNED
+    db.commit()
+    db.refresh(chat)
+    logger.info("Chat %s assigned by emp_id %s (user=%s)", payload.chat_id, payload.employee_id, current_user.id)
+    return {"success": True, "chat": ChatResponse.model_validate(chat)}
 
 # ============= MOCK DATA GENERATOR =============
 from generate_mock_data import generate_mock_chats as generate_mock_data

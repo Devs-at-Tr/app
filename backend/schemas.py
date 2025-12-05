@@ -357,10 +357,15 @@ class MessageResponse(BaseModel):
                 except (TypeError, ValueError):
                     self.attachments = []
         if not self.metadata and self.metadata_json:
-            try:
-                self.metadata = json.loads(self.metadata_json)
-            except (TypeError, ValueError):
-                self.metadata = None
+                try:
+                    self.metadata = json.loads(self.metadata_json)
+                except (TypeError, ValueError):
+                    self.metadata = None
+        # Backfill sent_by from metadata to support sender display in clients
+        if self.sent_by is None and self.metadata:
+            maybe_sent_by = self.metadata.get("sent_by") if isinstance(self.metadata, dict) else None
+            if isinstance(maybe_sent_by, dict):
+                self.sent_by = maybe_sent_by
 
     @field_validator("metadata", mode="before")
     @classmethod

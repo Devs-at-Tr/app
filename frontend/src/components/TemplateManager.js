@@ -176,11 +176,16 @@ const TemplateManager = () => {
       const token = localStorage.getItem('token');
       const config = { headers: { Authorization: `Bearer ${token}` } };
       const payload = {
-        ...formData,
-        meta_template_id: formData.meta_template_id?.trim() || null,
-        // Templates should start as not approved and be submitted to Meta
-        is_meta_approved: false
+        name: formData.name,
+        content: formData.content,
+        category: formData.category,
+        platform: formData.platform,
       };
+      // Only send Meta fields when creating a new template; updates are blocked by backend
+      if (!editingTemplate) {
+        payload.meta_template_id = formData.meta_template_id?.trim() || null;
+        payload.is_meta_approved = false; // must go through Meta approval flow
+      }
 
       if (editingTemplate) {
         // Update existing template
@@ -432,7 +437,7 @@ const TemplateManager = () => {
             <div>
               <label className="text-sm text-gray-300 block mb-2">
                 Message Content 
-                <span className="text-gray-500 ml-2">(Use {'{username}'}, {'{platform}'}, {'{order_id}'} for variables)</span>
+                <span className="text-gray-500 ml-2">(Use variables below)</span>
               </label>
               <Textarea
                 value={formData.content}
@@ -442,6 +447,16 @@ const TemplateManager = () => {
                 rows={4}
                 className="bg-[#0f0f1a] border-gray-700"
               />
+              <div className="flex flex-wrap gap-2 mt-2 text-xs text-gray-300">
+                {['{username}', '{platform}', '{order_id}', '{name}', '{agent_name}'].map((token) => (
+                  <span
+                    key={token}
+                    className="px-2 py-1 rounded-full bg-purple-500/10 border border-purple-500/30 text-purple-200"
+                  >
+                    {token}
+                  </span>
+                ))}
+              </div>
             </div>
 
             <div className="grid grid-cols-2 gap-4">
@@ -480,28 +495,30 @@ const TemplateManager = () => {
               </div>
             </div>
 
-            <div className="space-y-2">
-              <div className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  id="meta_approved"
-                  checked={formData.is_meta_approved}
-                  onChange={(e) => setFormData({ ...formData, is_meta_approved: e.target.checked })}
-                  className="w-4 h-4"
-                />
-                <label htmlFor="meta_approved" className="text-sm text-gray-300">
-                  Mark as Meta-approved (Utility)
-                </label>
+            {!editingTemplate && (
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    id="meta_approved"
+                    checked={formData.is_meta_approved}
+                    onChange={(e) => setFormData({ ...formData, is_meta_approved: e.target.checked })}
+                    className="w-4 h-4"
+                  />
+                  <label htmlFor="meta_approved" className="text-sm text-gray-300">
+                    Mark as Meta-approved (Utility)
+                  </label>
+                </div>
+                {formData.is_meta_approved && (
+                  <Input
+                    value={formData.meta_template_id}
+                    onChange={(e) => setFormData({ ...formData, meta_template_id: e.target.value })}
+                    placeholder="Meta Template ID (optional)"
+                    className="bg-[#0f0f1a] border-gray-700"
+                  />
+                )}
               </div>
-              {formData.is_meta_approved && (
-                <Input
-                  value={formData.meta_template_id}
-                  onChange={(e) => setFormData({ ...formData, meta_template_id: e.target.value })}
-                  placeholder="Meta Template ID (optional)"
-                  className="bg-[#0f0f1a] border-gray-700"
-                />
-              )}
-            </div>
+            )}
 
             <DialogFooter>
               <Button type="button" variant="outline" onClick={handleCloseDialog}>

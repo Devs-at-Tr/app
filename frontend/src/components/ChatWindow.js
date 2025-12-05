@@ -271,8 +271,16 @@ const getSenderLabel = (message, chat) => {
   );
 };
 
-const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, onBackToList }) => {
-  const { selectedChat: chat, sendMessage } = useChatContext();
+const ChatWindow = ({
+  agents,
+  userRole,
+  onAssignChat,
+  canAssignChats = false,
+  onBackToList,
+  showAssignmentInfo = true,
+  currentUser = null,
+}) => {
+  const { selectedChat: chat, sendMessage, selectChat } = useChatContext();
   const isFacebookChat = chat?.platform === 'FACEBOOK';
   const isMobile = useIsMobile(); // Must be at top level before any conditional logic
   const isTablet = useIsTablet();
@@ -310,6 +318,11 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
   const hasCountryOptions = countryOptions.length > 0;
   const [duplicateCheckStatus, setDuplicateCheckStatus] = useState(null); // null | 'ok' | 'duplicate' | 'error'
   const [duplicateCheckMessage, setDuplicateCheckMessage] = useState('');
+  const [duplicateAgentEmpId, setDuplicateAgentEmpId] = useState(null);
+  const [duplicateAgentName, setDuplicateAgentName] = useState(null);
+  const [resolvedAgentName, setResolvedAgentName] = useState(null);
+  const [assigningAgent, setAssigningAgent] = useState(false);
+  const [assignError, setAssignError] = useState('');
   const [isCheckingDuplicate, setIsCheckingDuplicate] = useState(false);
   const [phoneValidationStatus, setPhoneValidationStatus] = useState(null); // null | 'valid' | 'invalid' | 'error'
   const [phoneValidationMessage, setPhoneValidationMessage] = useState('');
@@ -347,6 +360,23 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
       null
     );
   }, [chat]);
+
+  const allowDuplicateAssignUI = useMemo(
+    () => {
+      // Hide controls if already assigned to the same agent by emp_id
+      const currentEmpId = chat?.assigned_agent?.emp_id
+        ? String(chat.assigned_agent.emp_id).trim().toLowerCase()
+        : null;
+      const targetEmpId = duplicateAgentEmpId
+        ? String(duplicateAgentEmpId).trim().toLowerCase()
+        : null;
+      if (currentEmpId && targetEmpId && currentEmpId === targetEmpId) {
+        return false;
+      }
+      return Boolean(duplicateAgentEmpId || duplicateAgentName) || showAssignmentInfo;
+    },
+    [chat?.assigned_agent?.emp_id, duplicateAgentEmpId, duplicateAgentName, showAssignmentInfo]
+  );
 
   const lastActivityLabel = useMemo(() => {
     if (!chat) {
@@ -572,30 +602,40 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
     fetchCountries();
   }, [fetchCountries]);
 
-  const extractVariables = (content) => {
-    const regex = /\{([^}]+)\}/g;
-    const variables = [];
-    let match;
-    while ((match = regex.exec(content)) !== null) {
-      const varName = match[1];
-      // Skip auto-populated variables
-      if (varName !== 'username' && varName !== 'platform') {
-        variables.push(varName);
-      }
-    }
-    return [...new Set(variables)]; // Remove duplicates
-  };
+const extractVariables = (content) => {
+  const regex = /\{([^}]+)\}/g;
+  const variables = [];
+  let match;
+  while ((match = regex.exec(content)) !== null) {
+    const varName = match[1];
+    if (!varName) continue;
+    variables.push(varName);
+  }
+  return [...new Set(variables)]; // Remove duplicates
+};
 
   const previewTemplateContent = (template) => {
     if (!template) return '';
     let content = template.content;
     const chatHandle = getChatHandle(chat);
     // Auto-populate
-    content = content.replace('{username}', chatHandle);
-    content = content.replace('{platform}', chat.platform);
+    const replacements = {
+      username: chatHandle,
+      platform: chat.platform,
+      'user.name': chat?.instagram_user?.name || chat?.facebook_user?.name || chat?.username || chatHandle,
+      'user.handle': chatHandle,
+    };
+    Object.entries(replacements).forEach(([key, value]) => {
+      if (value !== undefined && value !== null) {
+        content = content.replace(new RegExp(`\\{${key}\\}`, 'g'), value);
+      }
+    });
     // User-provided variables
     Object.keys(templateVariables).forEach(key => {
-      content = content.replace(`{${key}}`, templateVariables[key] || `{${key}}`);
+      const val = templateVariables[key];
+      if (val) {
+        content = content.replace(new RegExp(`\\{${key}\\}`, 'g'), val);
+      }
     });
     return content;
   };
@@ -604,7 +644,18 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
     setSelectedTemplate(template);
     const vars = extractVariables(template.content);
     const initialVars = {};
-    vars.forEach(v => initialVars[v] = '');
+    vars.forEach((v) => {
+      // Pre-fill common variables with best-effort values while keeping structure unchanged
+      if (v === 'username') {
+        initialVars[v] = getChatHandle(chat);
+      } else if (v === 'name') {
+        initialVars[v] = chat?.instagram_user?.name || chat?.facebook_user?.name || chat?.username || '';
+      } else if (v === 'agent_name') {
+        initialVars[v] = currentUser?.name || currentUser?.email || '';
+      } else {
+        initialVars[v] = '';
+      }
+    });
     setTemplateVariables(initialVars);
   };
 
@@ -869,11 +920,18 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
     if (!local) {
       setDuplicateCheckStatus('error');
       setDuplicateCheckMessage('Enter a phone number to check');
+      setDuplicateAgentEmpId(null);
+      setDuplicateAgentName(null);
+      setResolvedAgentName(null);
       return;
     }
     setIsCheckingDuplicate(true);
     setDuplicateCheckStatus(null);
     setDuplicateCheckMessage('');
+    setDuplicateAgentEmpId(null);
+    setDuplicateAgentName(null);
+    setResolvedAgentName(null);
+    setAssignError('');
     try {
       const token = localStorage.getItem('token');
       const resp = await axios.post(
@@ -889,12 +947,56 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
       const isError = Number(data.error) === 1;
       const hasDupes = Array.isArray(data.data) && data.data.length > 0;
       const duplicateFound = isError || hasDupes;
+      const firstEntry = Array.isArray(data.data) && data.data.length > 0 ? data.data[0] : {};
+      const dataObject = !Array.isArray(data.data) && data.data && typeof data.data === 'object' ? data.data : {};
+      const inferredEmpIdRaw =
+        firstEntry?.c_employee_id ||
+        firstEntry?.c_employeeid ||
+        firstEntry?.employee_id ||
+        firstEntry?.emp_id ||
+        dataObject?.c_employee_id ||
+        dataObject?.c_employeeid ||
+        dataObject?.employee_id ||
+        dataObject?.emp_id ||
+        data.c_employee_id ||
+        data.employee_id ||
+        data.emp_id ||
+        null;
+      const inferredName =
+        firstEntry?.employee_name ||
+        firstEntry?.assigned_to_name ||
+        dataObject?.employee_name ||
+        dataObject?.assigned_to_name ||
+        data.employee_name ||
+        data.assigned_to_name ||
+        null;
+      setDuplicateAgentEmpId(inferredEmpIdRaw ? String(inferredEmpIdRaw).trim() : null);
+      setDuplicateAgentName(inferredName || null);
+      setResolvedAgentName(null);
       setDuplicateCheckStatus(duplicateFound ? 'duplicate' : 'ok');
       setDuplicateCheckMessage(
         duplicateFound
           ?data.message || data.error_msg || 'Number already exists in CRM.'
           : 'Number is available.'
       );
+      // Try to resolve agent name from our users list when we have an employee ID
+      if (inferredEmpIdRaw) {
+        try {
+          const agentsResp = await axios.get(`${API}/users/agents`, {
+            headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+            params: { include_inactive: true },
+          });
+          const match = (agentsResp.data || []).find((a) => {
+            const empId = (a.emp_id || '').toString().trim().toLowerCase();
+            return empId === String(inferredEmpIdRaw).trim().toLowerCase();
+          });
+          if (match?.name) {
+            setResolvedAgentName(match.name);
+          }
+        } catch (lookupError) {
+          console.warn('Agent lookup failed', lookupError);
+        }
+      }
     } catch (error) {
       console.error('Duplicate check failed', error);
       const detail =
@@ -908,6 +1010,65 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
       setIsCheckingDuplicate(false);
     }
   }, [inquiryNumber, inquiryCountryCode]);
+
+  useEffect(() => {
+    const hasNumber = Boolean(normalizeLocalPhoneNumber(inquiryNumber));
+    if (showInquiryModal && hasNumber && !isCheckingDuplicate && !duplicateCheckStatus) {
+      handleCheckDuplicate();
+    }
+  }, [showInquiryModal, inquiryNumber, isCheckingDuplicate, duplicateCheckStatus, handleCheckDuplicate]);
+
+  const handleAssignToEmpId = useCallback(async () => {
+    if (!chat?.id || !duplicateAgentEmpId) {
+      return;
+    }
+    setAssigningAgent(true);
+    setAssignError('');
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        throw new Error('Missing auth token');
+      }
+      const agentsResp = await axios.get(`${API}/users/agents`, {
+        headers: { Authorization: `Bearer ${token}` },
+        params: { include_inactive: true },
+      });
+      const agentMatch = (agentsResp.data || []).find((a) => {
+        const empId = (a.emp_id || '').toString().trim().toLowerCase();
+        const name = (a.name || '').toString().trim().toLowerCase();
+        const targetEmpId = duplicateAgentEmpId ? duplicateAgentEmpId.toString().trim().toLowerCase() : null;
+        const targetName = duplicateAgentName ? duplicateAgentName.toString().trim().toLowerCase() : null;
+        return (targetEmpId && empId && empId === targetEmpId) || (targetName && name && name === targetName);
+      });
+      if (!agentMatch) {
+        setAssignError('Agent not found for this Employee ID.');
+        return;
+      }
+      if (agentMatch.is_active === false) {
+        setAssignError('Agent is inactive.');
+        return;
+      }
+
+      await axios.post(
+        `${API}/admin/assign-chat`,
+        { chat_id: chat.id, employee_id: duplicateAgentEmpId || agentMatch.emp_id },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+
+      setAssignError('');
+      setResolvedAgentName(agentMatch.name || null);
+      // Refresh current chat assignment so UI reflects the change and locks actions if needed
+      if (typeof selectChat === 'function') {
+        await selectChat(chat.id);
+      }
+    } catch (error) {
+      console.error('Assignment failed', error);
+      const detail = error.response?.data?.detail || error.message || 'Failed to assign chat';
+      setAssignError(detail);
+    } finally {
+      setAssigningAgent(false);
+    }
+  }, [API, chat?.id, duplicateAgentEmpId, onAssignChat]);
 
   const showMobileBackButton = Boolean(onBackToList) && isMobile;
 
@@ -1065,6 +1226,7 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
                 </SelectContent>
               </Select>
             ) : (
+              showAssignmentInfo && (
               <span
                 className={cn(
                   'assignment-pill assignment-pill--compact text-xs px-3 py-1.5 rounded-full truncate max-w-[220px]',
@@ -1074,6 +1236,7 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
               >
                 {assignedAgentName ? `Assigned to ${assignedAgentName}` : 'Unassigned'}
               </span>
+              )
             )}
             <Button
               variant="ghost"
@@ -1107,7 +1270,10 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
                   : isAgentMessage
                     ? 'bubble-agent'
                     : 'bubble-user';
-                const sentByName = msg.sent_by?.name || msg.sent_by?.email;
+                const sentByName =
+                  (msg.sent_by?.id && currentUser?.id === msg.sent_by.id
+                    ? currentUser.name || currentUser.email
+                    : msg.sent_by?.name || msg.sent_by?.email);
                 let originLabel = '';
                 if (showAsTicklegram) {
                   originLabel = `Sent from Ticklegram${sentByName ? ` - ${sentByName}` : ''}`;
@@ -1650,27 +1816,48 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
                     {isValidatingPhone ? 'Validating...' : phoneValidationMessage}
                   </p>
                 )}
-                <div className="pt-1">
-                  {hasDuplicateCheck && (<Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="px-3 text-xs"
-                  >
-                    Assigned to (Agent ID)
-                  </Button>
-                  )}
-                  {hasDuplicateCheck && (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="ml-2 px-3 text-xs"
-                    >
-                    Assigned to Me
-                    </Button>
-                  )}
-                </div>
+                {allowDuplicateAssignUI && (
+                  <div className="pt-1">
+                    {hasDuplicateCheck && (
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="px-3 text-xs"
+                          disabled={(!duplicateAgentEmpId && !duplicateAgentName) || assigningAgent}
+                          onClick={handleAssignToEmpId}
+                        >
+                          {assigningAgent
+                            ? 'Assigning...'
+                            : `Assign to ${resolvedAgentName || duplicateAgentName || 'agent'}`}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="px-3 text-xs"
+                          disabled={assigningAgent}
+                        >
+                          Assigned to Me
+                        </Button>
+                        {/* {(duplicateAgentEmpId || duplicateAgentName) && (
+                          <span className="text-[11px] text-[var(--tg-text-muted)]">
+                            {resolvedAgentName || duplicateAgentName || 'Matched agent'}
+                          </span>
+                        )} */}
+                      </div>
+                    )}
+                    {hasDuplicateCheck && !duplicateAgentEmpId && !duplicateAgentName && !assignError && (
+                      <p className="text-xs text-amber-400 mt-1">
+                        Employee ID not provided in duplicate response; cannot auto-assign.
+                      </p>
+                    )}
+                    {assignError && (
+                      <p className="text-xs text-amber-400 mt-1">{assignError}</p>
+                    )}
+                  </div>
+                )}
               </div>
               <div className="grid sm:grid-cols-2 gap-3">
                 <div className="space-y-1">
@@ -1754,9 +1941,10 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
             canSendManualMessage={canSendManualMessage}
             chatDisplayName={chatDisplayName}
             chatHandle={chatHandle}
-              chatAvatarUrl={chatAvatarUrl}
-              lastActivityLabel={lastActivityLabel}
-            />
+            chatAvatarUrl={chatAvatarUrl}
+            lastActivityLabel={lastActivityLabel}
+            showAssignmentInfo={showAssignmentInfo}
+          />
                 </div>
                 {attachmentsEnabled && showAttachmentForm && (
                   <div className="attachment-form">
@@ -1831,6 +2019,7 @@ const ChatWindow = ({ agents, userRole, onAssignChat, canAssignChats = false, on
             chatHandle={chatHandle}
             chatAvatarUrl={chatAvatarUrl}
             lastActivityLabel={lastActivityLabel}
+            showAssignmentInfo={showAssignmentInfo}
           />
         </aside>
       )}
@@ -1848,6 +2037,7 @@ const ChatProfilePanel = ({
   chatHandle,
   chatAvatarUrl,
   lastActivityLabel,
+  showAssignmentInfo = true,
 }) => {
   const assignedAgent = chat.assigned_agent;
   const messageCount = orderedMessages.length;
@@ -1880,14 +2070,18 @@ const ChatProfilePanel = ({
       label: 'Handle',
       value: `@${handle || 'unknown'}`,
     },
-    {
-      label: 'Assigned Agent',
-      value: assignedAgent?.name || 'Unassigned',
-    },
-    {
-      label: 'Status',
-      value: statusLabel,
-    },
+    ...(showAssignmentInfo
+      ? [
+          {
+            label: 'Assigned Agent',
+            value: assignedAgent?.name || 'Unassigned',
+          },
+          {
+            label: 'Status',
+            value: statusLabel,
+          },
+        ]
+      : []),
     {
       label: 'Last Activity',
       value: lastActivityLabel || 'Not available',
@@ -1908,7 +2102,7 @@ const ChatProfilePanel = ({
       label: 'Unread Messages',
       value: chat.unread_count ?? 0,
     },
-    ...(chat.instagram_user_id
+    ...(showAssignmentInfo && chat.instagram_user_id
       ? [
           {
             label: 'Instagram User ID',
@@ -1916,7 +2110,7 @@ const ChatProfilePanel = ({
           },
         ]
       : []),
-    ...(chat.facebook_page_id
+    ...(showAssignmentInfo && chat.facebook_page_id
       ? [
           {
             label: 'Facebook Page ID',
@@ -1924,14 +2118,18 @@ const ChatProfilePanel = ({
           },
         ]
       : []),
-    {
-      label: 'Chat ID',
-      value: chat.id,
-    },
-    {
-      label: 'Human Agent Window',
-      value: canSendManualMessage ? 'Active (within 24 hours)' : 'Expired',
-    },
+    ...(showAssignmentInfo
+      ? [
+          {
+            label: 'Chat ID',
+            value: chat.id,
+          },
+          {
+            label: 'Human Agent Window',
+            value: canSendManualMessage ? 'Active (within 24 hours)' : 'Expired',
+          },
+        ]
+      : []),
   ];
 
   return (
@@ -1959,7 +2157,7 @@ const ChatProfilePanel = ({
             <p className="text-base font-semibold text-[var(--tg-text-primary)] truncate">{displayName}</p>
             <p className="text-xs text-[var(--tg-text-muted)] truncate">@{handle || 'unknown'}</p>
             <div className="flex flex-wrap gap-2 mt-2">
-              <Badge className={statusBadgeClass}>{statusLabel}</Badge>
+              {showAssignmentInfo && <Badge className={statusBadgeClass}>{statusLabel}</Badge>}
               <Badge variant="outline" className="border-[var(--tg-border-soft)] text-[var(--tg-text-secondary)]">
                 {platformLabel}
               </Badge>
