@@ -337,12 +337,20 @@ class MessageResponse(BaseModel):
     platform: MessagePlatform
     timestamp: datetime
     is_ticklegram: bool = False
+    is_lead_form_message: Optional[bool] = False
     attachments: List[Dict[str, Any]] = Field(default_factory=list)
     attachments_json: Optional[str] = Field(default=None, exclude=True)
     metadata_json: Optional[str] = Field(default=None, exclude=True)
     metadata: Optional[Dict[str, Any]] = None
     is_gif: Optional[bool] = Field(default=False, exclude=True)
     sent_by: Optional[Dict[str, Any]] = None
+
+    @model_validator(mode="before")
+    def default_lead_form_flag(cls, values):
+        # Older rows may store NULL; normalize to False for validation/output.
+        if isinstance(values, dict) and values.get("is_lead_form_message") is None:
+            values["is_lead_form_message"] = False
+        return values
     
     class Config:
         from_attributes = True

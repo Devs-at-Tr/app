@@ -1434,6 +1434,63 @@ def resolve_message_text(raw_text: Optional[str], attachments: List[Any]) -> Opt
     return summary
 
 
+LEAD_FORM_LABELS = [
+    r"what\s+is\s+your\s+child's\s+age\s*\??",
+    r"what\s+is\s+your\s+primary\s+goal\s+for\s+your\s+child's\s+development\s*\??",
+    r"full\s+name\s*:?",
+    r"phone\s+number\s*:?",
+    r"email\s*:?",
+    r"city\s*:?",
+]
+
+
+def is_lead_form_message(text: Optional[str]) -> bool:
+    """
+    Detect ad/lead-form style blocks so we can avoid agent assignment.
+    Heuristic: message has >=3 lines starting with known labels (case-insensitive).
+    """
+    if not text:
+        return False
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if len(lines) < 2:
+        return False
+    import re
+
+    pattern = re.compile(rf"^({'|'.join(LEAD_FORM_LABELS)})", re.IGNORECASE)
+    matches = sum(1 for ln in lines if pattern.search(ln))
+    return matches >= 3
+
+
+def _clear_assignment_for_lead_form(chat: Chat) -> None:
+    """Ensure lead-form chats stay unassigned."""
+    chat.assigned_agent = None
+    chat.assigned_to = None
+    chat.status = ChatStatus.UNASSIGNED
+
+
+def _is_useless_template_attachments(attachments: Optional[List[Any]]) -> bool:
+    """
+    True when attachments consist solely of template payloads with empty generic/elements,
+    which are noisy webhook deliveries that should be ignored.
+    """
+    if not attachments:
+        return False
+    cleaned = attachments if isinstance(attachments, list) else [attachments]
+    found_template = False
+    for att in cleaned:
+        if not isinstance(att, dict):
+            return False
+        if att.get("type") != "template":
+            return False
+        payload = att.get("payload") or {}
+        generic = payload.get("generic") or {}
+        elements = generic.get("elements") or payload.get("elements") or []
+        if elements:
+            return False
+        found_template = True
+    return found_template
+
+
 def hydrate_instagram_chat_messages(chat: Optional[Chat], instagram_msgs: List[InstagramMessageLog]) -> None:
     """Fill in message content for Instagram chats using stored attachment payloads."""
     if not chat or chat.platform != MessagePlatform.INSTAGRAM:
@@ -2737,12 +2794,20 @@ async def _handle_instagram_webhook(request: Request, db: Session) -> Dict[str, 
                 raw_attachments = processed_payload.get("attachments") or []
                 if not isinstance(raw_attachments, list):
                     raw_attachments = [raw_attachments]
+                raw_text_content = processed_payload.get("text")
+                lead_form = is_lead_form_message(raw_text_content)
+                if _is_useless_template_attachments(raw_attachments) and not (raw_text_content or "").strip():
+                    logger.info(
+                        "Skipping template-only Instagram webhook message igsid=%s mid=%s",
+                        igsid,
+                        message_id or normalized_message_id,
+                    )
+                    continue
                 attachments = prepare_instagram_attachments(
                     igsid=igsid,
                     message_identifier=normalized_message_id or f"{timestamp_seconds}",
                     attachments=raw_attachments
                 )
-                raw_text_content = processed_payload.get("text")
 
                 profile_data: Optional[Dict[str, Any]] = profile_cache.get(igsid)
                 if profile_data is None:
@@ -2868,9 +2933,12 @@ async def _handle_instagram_webhook(request: Request, db: Session) -> Dict[str, 
                         )
                         db.add(chat)
                         db.flush()
-                        assigned_agent = _assign_chat_round_robin(db, chat)
-                        if assigned_agent:
-                            chat.assigned_agent = assigned_agent
+                        if not lead_form:
+                            assigned_agent = _assign_chat_round_robin(db, chat)
+                            if assigned_agent:
+                                chat.assigned_agent = assigned_agent
+                        else:
+                            _clear_assignment_for_lead_form(chat)
                     else:
                         if profile_data:
                             updated_username = profile_data.get("username") or profile_data.get("name")
@@ -2890,10 +2958,14 @@ async def _handle_instagram_webhook(request: Request, db: Session) -> Dict[str, 
                         timestamp=event_datetime,
                         is_ticklegram=False,
                         attachments_json=_dump_attachments_json(attachments),
+                        is_lead_form_message=lead_form,
                         metadata_json=referral_metadata_json
                     )
                     new_message.attachments = attachments
                     db.add(new_message)
+
+                    if lead_form:
+                        _clear_assignment_for_lead_form(chat)
 
                     chat.last_message = inbound_content
                     chat.unread_count += 1
@@ -4358,6 +4430,14 @@ async def handle_facebook_webhook(request: Request, db: Session = Depends(get_db
                             message_data=message_data,
                             page_id=page_id
                         )
+                        fb_attachments = processed.get("attachments") or []
+                        if _is_useless_template_attachments(fb_attachments) and not (processed.get("text") or "").strip():
+                            logger.info(
+                                "Skipping template-only Facebook webhook message sender=%s page=%s",
+                                sender_id,
+                                page_id,
+                            )
+                            continue
                         fb_referral_payload = _normalize_referral_payload(
                             _extract_messaging_referral(messaging_event)
                         )
@@ -4372,7 +4452,9 @@ async def handle_facebook_webhook(request: Request, db: Session = Depends(get_db
                             None,
                             extra=fb_extra_meta or None
                         )
-                        
+
+                        lead_form = is_lead_form_message(processed.get("text"))
+
                         chat = db.query(Chat).filter(
                             Chat.facebook_user_id == sender_id,
                             Chat.platform == MessagePlatform.FACEBOOK,
@@ -4474,9 +4556,10 @@ async def handle_facebook_webhook(request: Request, db: Session = Depends(get_db
                             )
                             db.add(chat)
                             db.flush()
-                            assigned_agent = _assign_chat_round_robin(db, chat)
-                            if assigned_agent:
-                                chat.assigned_agent = assigned_agent
+                            if not lead_form:
+                                assigned_agent = _assign_chat_round_robin(db, chat)
+                                if assigned_agent:
+                                    chat.assigned_agent = assigned_agent
                         elif not chat.facebook_user_id:
                             chat.facebook_user_id = facebook_user.id
 
@@ -4493,11 +4576,15 @@ async def handle_facebook_webhook(request: Request, db: Session = Depends(get_db
                             message_type=MessageType.TEXT,
                             timestamp=event_timestamp,
                             is_ticklegram=False,
+                            is_lead_form_message=lead_form,
                             metadata_json=fb_metadata_json
                         )
                         new_message.attachments = []
                         db.add(new_message)
-                        
+
+                        if lead_form:
+                            _clear_assignment_for_lead_form(chat)
+
                         # Update chat
                         chat.last_message = processed.get("text", "")
                         chat.unread_count += 1

@@ -1,58 +1,35 @@
 """
-Migration script to create MySQL database schema
-Run this script to initialize the MySQL database with all tables
+Bootstrap the schema for a fresh MySQL database by creating every table defined
+on the SQLAlchemy metadata. For ongoing environments, prefer running Alembic
+migrations to stay aligned with the documented schema.
 """
-from database import Base, engine
-from models import (
-    User,
-    InstagramAccount,
-    Chat,
-    InstagramMessage,
-    FacebookMessage,
-    FacebookUser,
-    FacebookPage,
-    InstagramMessageLog,
-)
 import sys
 
-def create_tables():
-    """Create all tables in the MySQL database"""
+from database import Base, engine
+import models  # noqa: F401  Ensure all models are imported so metadata is complete
+
+
+def create_all_tables() -> bool:
     try:
-        print("🔄 Creating tables in MySQL database...")
-        
-        # Create all tables
+        print("Creating all tables from SQLAlchemy metadata...")
         Base.metadata.create_all(bind=engine)
-        
-        print("✅ Successfully created all tables!")
-        print("\nCreated tables:")
-        print("  - users")
-        print("  - instagram_accounts")
-        print("  - chats")
-        print("  - instagram_messages")
-        print("  - facebook_messages")
-        print("  - instagram_message_logs")
-        print("  - facebook_users")
-        print("  - facebook_pages")
-        
+        print("All tables created.")
         return True
-    except Exception as e:
-        print(f"❌ Error creating tables: {e}")
+    except Exception as exc:  # pragma: no cover - setup utility
+        print(f"Error creating tables: {exc}")
         return False
+
 
 if __name__ == "__main__":
     print("=" * 50)
-    print("MySQL Database Migration")
+    print("MySQL Schema Bootstrap")
     print("=" * 50)
-    
-    success = create_tables()
-    
+
+    success = create_all_tables()
     if success:
-        print("\n✨ Migration completed successfully!")
-        print("\nNext steps:")
-        print("1. Restart your backend server: uvicorn server:app --reload --port 8000")
-        print("2. The application will now use MySQL database")
-        print("3. Run seed_data.py if you need initial data")
+        print("\nSchema creation completed successfully.")
+        print("Next steps: run Alembic migrations going forward to stay aligned.")
         sys.exit(0)
     else:
-        print("\n❌ Migration failed!")
+        print("\nSchema creation failed.")
         sys.exit(1)

@@ -1,7 +1,19 @@
-from sqlalchemy import Column, String, DateTime, ForeignKey, Enum as SQLEnum, Text, Integer, Boolean, BigInteger, Float, JSON
+from sqlalchemy import (
+    Column,
+    String,
+    DateTime,
+    ForeignKey,
+    Enum as SQLEnum,
+    Text,
+    Integer,
+    Boolean,
+    BigInteger,
+    Float,
+    JSON,
+    func,
+)
 from sqlalchemy.orm import relationship
 from database import Base
-from datetime import datetime, timezone
 import uuid
 import enum
 import json
@@ -51,10 +63,21 @@ class Position(Base):
     name = Column(String(255), nullable=False)
     slug = Column(String(255), nullable=False, unique=True, index=True)
     description = Column(Text, nullable=True)
-    permissions_json = Column(Text, nullable=False, default="[]")
-    is_system = Column(Boolean, default=False)
-    created_at = Column(DateTime(timezone=True), default=utc_now)
-    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+    permissions_json = Column(Text, nullable=False, default="[]", server_default="[]")
+    is_system = Column(Boolean, nullable=False, default=False, server_default="0")
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        server_default=func.now(),
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        onupdate=utc_now,
+        server_default=func.now(),
+    )
 
     users = relationship("User", back_populates="position")
 
@@ -87,11 +110,27 @@ class User(Base):
     country = Column(String(100), nullable=True)
     emp_id = Column(String(100), unique=True, nullable=True, index=True)
     password_hash = Column(String(255), nullable=False)
-    role = Column(SQLEnum(UserRole), nullable=False, default=UserRole.AGENT)
+    role = Column(
+        SQLEnum(UserRole),
+        nullable=False,
+        default=UserRole.AGENT,
+        server_default=UserRole.AGENT.value,
+    )
     position_id = Column(String(36), ForeignKey("positions.id"), nullable=True, index=True)
     is_active = Column(Boolean, nullable=False, default=True, server_default="1")
-    created_at = Column(DateTime(timezone=True), default=utc_now)
-    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        server_default=func.now(),
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        onupdate=utc_now,
+        server_default=func.now(),
+    )
     
     instagram_accounts = relationship("InstagramAccount", back_populates="user", cascade="all, delete-orphan")
     assigned_chats = relationship("Chat", back_populates="assigned_agent", foreign_keys="Chat.assigned_to")
@@ -107,8 +146,19 @@ class PasswordResetToken(Base):
     token_hash = Column(String(128), nullable=False, unique=True)
     expires_at = Column(DateTime(timezone=True), nullable=False)
     used_at = Column(DateTime(timezone=True), nullable=True)
-    created_at = Column(DateTime(timezone=True), default=utc_now)
-    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        server_default=func.now(),
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        onupdate=utc_now,
+        server_default=func.now(),
+    )
 
     user = relationship("User", backref="password_reset_tokens")
 
@@ -117,7 +167,12 @@ class DBSchemaSnapshot(Base):
     __tablename__ = "db_schema_snapshots"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    created_at = Column(DateTime(timezone=True), default=utc_now)
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        server_default=func.now(),
+    )
     snapshot_json = Column(Text, nullable=False)
     comment = Column(String(255), nullable=True)
 
@@ -133,7 +188,12 @@ class DBSchemaChange(Base):
     table_name = Column(String(255), nullable=False)
     column_name = Column(String(255), nullable=True)
     details_json = Column(Text, nullable=True)
-    created_at = Column(DateTime(timezone=True), default=utc_now)
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        server_default=func.now(),
+    )
 
     snapshot = relationship("DBSchemaSnapshot", back_populates="changes")
 
@@ -141,11 +201,16 @@ class InstagramAccount(Base):
     __tablename__ = "instagram_accounts"
     
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id = Column(String(36), ForeignKey("users.id"), nullable=False)
+    user_id = Column(String(36), ForeignKey("users.id"), nullable=False, index=True)
     page_id = Column(String(255), nullable=False)
     access_token = Column(String(500), nullable=False)
     username = Column(String(255), nullable=True)
-    connected_at = Column(DateTime(timezone=True), default=utc_now)
+    connected_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        server_default=func.now(),
+    )
     
     user = relationship("User", back_populates="instagram_accounts")
 
@@ -158,13 +223,35 @@ class Chat(Base):
     username = Column(String(255), nullable=False)
     profile_pic_url = Column(Text, nullable=True)
     last_message = Column(Text, nullable=True)
-    status = Column(SQLEnum(ChatStatus), nullable=False, default=ChatStatus.UNASSIGNED)
+    status = Column(
+        SQLEnum(ChatStatus),
+        nullable=False,
+        default=ChatStatus.UNASSIGNED,
+        server_default=ChatStatus.UNASSIGNED.value,
+    )
     assigned_to = Column(String(36), ForeignKey("users.id"), nullable=True)
-    unread_count = Column(Integer, default=0)
-    platform = Column(SQLEnum(MessagePlatform), nullable=False, default=MessagePlatform.INSTAGRAM, index=True)
+    unread_count = Column(Integer, default=0, server_default="0")
+    platform = Column(
+        SQLEnum(MessagePlatform),
+        nullable=False,
+        default=MessagePlatform.INSTAGRAM,
+        server_default=MessagePlatform.INSTAGRAM.value,
+        index=True,
+    )
     facebook_page_id = Column(String(255), nullable=True)
-    created_at = Column(DateTime(timezone=True), default=utc_now)
-    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        server_default=func.now(),
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        onupdate=utc_now,
+        server_default=func.now(),
+    )
     last_incoming_at = Column(DateTime(timezone=True), nullable=True)
     last_outgoing_at = Column(DateTime(timezone=True), nullable=True)
     
@@ -203,14 +290,31 @@ class AssignmentCursor(Base):
 
     name = Column(String(64), primary_key=True)
     last_user_id = Column(String(36), nullable=True)
-    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        onupdate=utc_now,
+        server_default=func.now(),
+    )
 
 class FacebookUser(Base):
     __tablename__ = "facebook_users"
 
     id = Column(String(255), primary_key=True)
-    first_seen_at = Column(DateTime(timezone=True), default=utc_now)
-    last_seen_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+    first_seen_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        server_default=func.now(),
+    )
+    last_seen_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        onupdate=utc_now,
+        server_default=func.now(),
+    )
     last_message = Column(Text, nullable=True)
     username = Column(String(255), nullable=True)
     name = Column(String(255), nullable=True)
@@ -225,18 +329,34 @@ class ChatMessageMixin:
     chat_id = Column(String(36), ForeignKey("chats.id"), nullable=False)
     sender = Column(SQLEnum(MessageSender), nullable=False)
     content = Column(Text, nullable=False)
-    message_type = Column(SQLEnum(MessageType), nullable=False, default=MessageType.TEXT)
-    timestamp = Column(DateTime(timezone=True), default=utc_now)
+    message_type = Column(
+        SQLEnum(MessageType),
+        nullable=False,
+        default=MessageType.TEXT,
+        server_default=MessageType.TEXT.value,
+    )
+    timestamp = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        server_default=func.now(),
+    )
     attachments_json = Column(Text, nullable=True)
     metadata_json = Column(Text, nullable=True)
-    is_gif = Column(Boolean, nullable=False, default=False)
-    is_ticklegram = Column(Boolean, nullable=False, default=False)
+    is_gif = Column(Boolean, nullable=False, default=False, server_default="0")
+    is_ticklegram = Column(Boolean, nullable=False, default=False, server_default="0")
+    is_lead_form_message = Column(Boolean, nullable=False, default=False, server_default="0")
 
 
 class InstagramMessage(ChatMessageMixin, Base):
     __tablename__ = "instagram_messages"
 
-    platform = Column(SQLEnum(MessagePlatform), nullable=False, default=MessagePlatform.INSTAGRAM)
+    platform = Column(
+        SQLEnum(MessagePlatform),
+        nullable=False,
+        default=MessagePlatform.INSTAGRAM,
+        server_default=MessagePlatform.INSTAGRAM.value,
+    )
     instagram_user_id = Column(String(255), ForeignKey("instagram_users.igsid"), nullable=False, index=True)
 
     chat = relationship("Chat", back_populates="instagram_chat_messages")
@@ -246,7 +366,12 @@ class InstagramMessage(ChatMessageMixin, Base):
 class FacebookMessage(ChatMessageMixin, Base):
     __tablename__ = "facebook_messages"
 
-    platform = Column(SQLEnum(MessagePlatform), nullable=False, default=MessagePlatform.FACEBOOK)
+    platform = Column(
+        SQLEnum(MessagePlatform),
+        nullable=False,
+        default=MessagePlatform.FACEBOOK,
+        server_default=MessagePlatform.FACEBOOK.value,
+    )
     facebook_user_id = Column(String(255), ForeignKey("facebook_users.id"), nullable=False, index=True)
 
     chat = relationship("Chat", back_populates="facebook_chat_messages")
@@ -261,7 +386,12 @@ class FacebookWebhookEvent(Base):
     object = Column(String(64), nullable=True)
     page_id = Column(String(255), nullable=True, index=True)
     payload = Column(JSON, nullable=False)
-    received_at = Column(DateTime(timezone=True), default=utc_now)
+    received_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        server_default=func.now(),
+    )
 
 class FacebookPage(Base):
     __tablename__ = "facebook_pages"
@@ -271,9 +401,20 @@ class FacebookPage(Base):
     page_id = Column(String(255), unique=True, nullable=False, index=True)
     page_name = Column(String(255), nullable=True)
     access_token = Column(String(500), nullable=False)
-    is_active = Column(Boolean, default=True)
-    connected_at = Column(DateTime(timezone=True), default=utc_now)
-    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+    is_active = Column(Boolean, nullable=False, default=True, server_default="1")
+    connected_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        server_default=func.now(),
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        onupdate=utc_now,
+        server_default=func.now(),
+    )
     
     user = relationship("User", backref="facebook_pages")
     status_logs = relationship("FacebookPageStatusLog", back_populates="page", cascade="all, delete-orphan")
@@ -285,7 +426,12 @@ class FacebookPageStatusLog(Base):
     page_id = Column(String(255), ForeignKey("facebook_pages.page_id"), nullable=False, index=True)
     changed_by = Column(String(255), nullable=False)
     changed_to = Column(Boolean, nullable=False)
-    changed_at = Column(DateTime(timezone=True), default=utc_now)
+    changed_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        server_default=func.now(),
+    )
     note = Column(Text, nullable=True)
 
     page = relationship("FacebookPage", back_populates="status_logs", foreign_keys=[page_id])
@@ -297,7 +443,12 @@ class UserStatusLog(Base):
     user_id = Column(String(36), ForeignKey("users.id"), nullable=False, index=True)
     changed_by = Column(String(255), nullable=False)
     changed_to = Column(Boolean, nullable=False)
-    changed_at = Column(DateTime(timezone=True), default=utc_now)
+    changed_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        server_default=func.now(),
+    )
     note = Column(Text, nullable=True)
 
     user = relationship("User", back_populates="status_logs", foreign_keys=[user_id])
@@ -313,10 +464,21 @@ class MessageTemplate(Base):
     meta_template_id = Column(String(255), nullable=True)
     meta_submission_id = Column(String(255), nullable=True)
     meta_submission_status = Column(String(50), nullable=True)  # pending, approved, rejected
-    is_meta_approved = Column(Boolean, default=False)
+    is_meta_approved = Column(Boolean, nullable=False, default=False, server_default="0")
     created_by = Column(String(36), ForeignKey("users.id"), nullable=False)
-    created_at = Column(DateTime(timezone=True), default=utc_now)
-    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        server_default=func.now(),
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        onupdate=utc_now,
+        server_default=func.now(),
+    )
     
     creator = relationship("User", foreign_keys=[created_by])
 
@@ -324,8 +486,19 @@ class InstagramUser(Base):
     __tablename__ = "instagram_users"
 
     igsid = Column(String(255), primary_key=True)
-    first_seen_at = Column(DateTime(timezone=True), default=utc_now)
-    last_seen_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+    first_seen_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        server_default=func.now(),
+    )
+    last_seen_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        onupdate=utc_now,
+        server_default=func.now(),
+    )
     last_message = Column(Text, nullable=True)
     username = Column(String(255), nullable=True)
     name = Column(String(255), nullable=True)
@@ -344,11 +517,16 @@ class InstagramMessageLog(Base):
     text = Column(Text, nullable=True)
     attachments_json = Column(Text, nullable=True)
     ts = Column(BigInteger, nullable=False, index=True)
-    created_at = Column(DateTime(timezone=True), default=utc_now)
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        server_default=func.now(),
+    )
     raw_payload_json = Column(Text, nullable=True)
     metadata_json = Column(Text, nullable=True)
-    is_gif = Column(Boolean, nullable=False, default=False)
-    is_ticklegram = Column(Boolean, nullable=False, default=False)
+    is_gif = Column(Boolean, nullable=False, default=False, server_default="0")
+    is_ticklegram = Column(Boolean, nullable=False, default=False, server_default="0")
 
     user = relationship("InstagramUser", back_populates="message_logs")
 
@@ -359,13 +537,29 @@ class InstagramComment(Base):
     media_id = Column(String(255), nullable=False, index=True)
     author_id = Column(String(255), nullable=True, index=True)
     text = Column(Text, nullable=True)
-    hidden = Column(Boolean, default=False)
-    action = Column(SQLEnum(InstagramCommentAction), nullable=False, default=InstagramCommentAction.CREATED)
+    hidden = Column(Boolean, nullable=False, default=False, server_default="0")
+    action = Column(
+        SQLEnum(InstagramCommentAction),
+        nullable=False,
+        default=InstagramCommentAction.CREATED,
+        server_default=InstagramCommentAction.CREATED.value,
+    )
     mentioned_user_id = Column(String(255), nullable=True)
     attachments_json = Column(Text, nullable=True)
     ts = Column(BigInteger, nullable=False, index=True)
-    created_at = Column(DateTime(timezone=True), default=utc_now)
-    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        server_default=func.now(),
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        onupdate=utc_now,
+        server_default=func.now(),
+    )
 
 class InstagramMarketingEvent(Base):
     __tablename__ = "instagram_marketing_events"
@@ -380,7 +574,12 @@ class InstagramMarketingEvent(Base):
     payload_json = Column(Text, nullable=True)
     response_json = Column(Text, nullable=True)
     ts = Column(BigInteger, nullable=False, index=True)
-    created_at = Column(DateTime(timezone=True), default=utc_now)
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        server_default=func.now(),
+    )
 
 class InstagramInsight(Base):
     __tablename__ = "instagram_insights"
@@ -390,4 +589,10 @@ class InstagramInsight(Base):
     entity_id = Column(String(255), nullable=False, index=True)
     period = Column(String(50), nullable=True)
     metrics_json = Column(Text, nullable=False)
-    fetched_at = Column(DateTime(timezone=True), default=utc_now, index=True)
+    fetched_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        server_default=func.now(),
+        index=True,
+    )
