@@ -249,6 +249,20 @@ const resolveBrowserDialCode = async (countries = []) => {
   return null;
 };
 
+const splitFullName = (raw = '') => {
+  const onlyAlnumSpaces = (raw || '').replace(/[^A-Za-z0-9\s]/g, '').trim();
+  const cleaned = onlyAlnumSpaces.replace(/\s+/g, ' ');
+  if (!cleaned) return { first: '', middle: '', last: '' };
+  const parts = cleaned.split(' ');
+  if (parts.length === 1) {
+    return { first: parts[0], middle: '', last: '' };
+  }
+  if (parts.length === 2) {
+    return { first: parts[0], middle: '', last: parts[1] };
+  }
+  return { first: parts[0], middle: parts.slice(1, -1).join(' '), last: parts[parts.length - 1] };
+};
+
 const FacebookIcon = ({ className }) => (
   <svg className={className} viewBox="0 0 24 24" fill="currentColor">
     <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
@@ -303,14 +317,33 @@ const ChatWindow = ({
   const [showInquiryModal, setShowInquiryModal] = useState(false);
   const [inquiryNumber, setInquiryNumber] = useState('');
   const [inquiryNotes, setInquiryNotes] = useState('');
-  const [inquiryName, setInquiryName] = useState('');
   const [inquiryEmail, setInquiryEmail] = useState('');
   const [inquiryCity, setInquiryCity] = useState('');
   const [inquiryAddress, setInquiryAddress] = useState('');
   const [inquiryDob, setInquiryDob] = useState('');
   const [inquiryWhatsApp, setInquiryWhatsApp] = useState('');
+  const [inquiryCountry, setInquiryCountry] = useState('');
   const [inquiryCountryCode, setInquiryCountryCode] = useState('+1');
   const [inquiryPhoneError, setInquiryPhoneError] = useState('');
+  const [inquiryFirstName, setInquiryFirstName] = useState('');
+  const [inquiryMiddleName, setInquiryMiddleName] = useState('');
+  const [inquiryLastName, setInquiryLastName] = useState('');
+  const [inquiryContact2CountryCode, setInquiryContact2CountryCode] = useState('');
+  const [inquiryContact2Number, setInquiryContact2Number] = useState('');
+  const [inquiryGender, setInquiryGender] = useState('male');
+  const [inquiryVenue, setInquiryVenue] = useState('');
+  const [inquiryPincode, setInquiryPincode] = useState('');
+  const [inquiryType, setInquiryType] = useState('');
+  const [inquiryDate, setInquiryDate] = useState('');
+  const [inquirySource, setInquirySource] = useState('');
+  const [inquiryCampaign, setInquiryCampaign] = useState('');
+  const [inquiryProgram, setInquiryProgram] = useState('');
+  const [followUpDate, setFollowUpDate] = useState('');
+  const [followUpTime, setFollowUpTime] = useState('');
+  const [inquiryStatus, setInquiryStatus] = useState('');
+  const [isBlogger, setIsBlogger] = useState(false);
+  const [autoAssignInquiry, setAutoAssignInquiry] = useState(false);
+  const [isFranchisee, setIsFranchisee] = useState(false);
   const [countryCodeManuallySet, setCountryCodeManuallySet] = useState(false);
   const [countryOptions, setCountryOptions] = useState([]);
   const [isLoadingCountries, setIsLoadingCountries] = useState(false);
@@ -327,6 +360,14 @@ const ChatWindow = ({
   const [phoneValidationStatus, setPhoneValidationStatus] = useState(null); // null | 'valid' | 'invalid' | 'error'
   const [phoneValidationMessage, setPhoneValidationMessage] = useState('');
   const [isValidatingPhone, setIsValidatingPhone] = useState(false);
+  const [followUpError, setFollowUpError] = useState('');
+  const todayStr = useMemo(() => new Date().toISOString().split('T')[0], []);
+  const currentTimeStr = useMemo(() => {
+    const d = new Date();
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mm = String(d.getMinutes()).padStart(2, '0');
+    return `${hh}:${mm}`;
+  }, []);
   const messagesEndRef = useRef(null);
   const messagesContainerRef = useRef(null);
   const longPressTimerRef = useRef(null);
@@ -363,6 +404,9 @@ const ChatWindow = ({
 
   const allowDuplicateAssignUI = useMemo(
     () => {
+      if (duplicateCheckStatus === 'ok') {
+        return false; // new inquiry; no auto-assign buttons
+      }
       // Hide controls if already assigned to the same agent by emp_id
       const currentEmpId = chat?.assigned_agent?.emp_id
         ? String(chat.assigned_agent.emp_id).trim().toLowerCase()
@@ -375,7 +419,7 @@ const ChatWindow = ({
       }
       return Boolean(duplicateAgentEmpId || duplicateAgentName) || showAssignmentInfo;
     },
-    [chat?.assigned_agent?.emp_id, duplicateAgentEmpId, duplicateAgentName, showAssignmentInfo]
+    [chat?.assigned_agent?.emp_id, duplicateAgentEmpId, duplicateAgentName, showAssignmentInfo, duplicateCheckStatus]
   );
 
   const lastActivityLabel = useMemo(() => {
@@ -715,7 +759,8 @@ const extractVariables = (content) => {
     inquiryPhoneIsValid &&
     duplicateCheckStatus === 'ok' &&
     !isCheckingDuplicate &&
-    !isPhoneInvalid;
+    !isPhoneInvalid &&
+    !followUpError;
 
   useEffect(() => {
     if (!inquiryNumber && !inquiryCountryCode) {
@@ -733,6 +778,16 @@ const extractVariables = (content) => {
     setDuplicateCheckStatus(null);
     setDuplicateCheckMessage('');
   }, [inquiryNumber, inquiryCountryCode]);
+
+  useEffect(() => {
+    if (!showInquiryModal || !chatDisplayName) return;
+    const alreadyFilled = inquiryFirstName || inquiryMiddleName || inquiryLastName;
+    if (alreadyFilled) return;
+    const nameParts = splitFullName(chatDisplayName);
+    setInquiryFirstName(nameParts.first);
+    setInquiryMiddleName(nameParts.middle);
+    setInquiryLastName(nameParts.last);
+  }, [showInquiryModal, chatDisplayName, inquiryFirstName, inquiryMiddleName, inquiryLastName]);
 
   useEffect(() => {
     if (!inquiryCountryCode && !inquiryNumber) {
@@ -803,6 +858,29 @@ const extractVariables = (content) => {
     }, 400);
     return () => clearTimeout(handle);
   }, [inquiryCountryCode, inquiryNumber]);
+
+  useEffect(() => {
+    if (!followUpDate) {
+      setFollowUpError('');
+      return;
+    }
+    const now = new Date();
+    const selectedDate = new Date(followUpDate);
+    if (selectedDate < new Date(todayStr)) {
+      setFollowUpError('Follow-up cannot be in the past.');
+      return;
+    }
+    if (followUpDate === todayStr && followUpTime) {
+      const [hh = '00', mm = '00'] = followUpTime.split(':');
+      const selectedTime = new Date();
+      selectedTime.setHours(Number(hh), Number(mm), 0, 0);
+      if (selectedTime < now) {
+        setFollowUpError('Follow-up time cannot be in the past.');
+        return;
+      }
+    }
+    setFollowUpError('');
+  }, [followUpDate, followUpTime, todayStr]);
 
   useEffect(() => {
     if (countryCodeManuallySet || hasAutoSetCountry) return;
@@ -1359,7 +1437,10 @@ const extractVariables = (content) => {
                                     setInquiryNumber(normalizeLocalPhoneNumber(normalizedMatch));
                                   }
                                   setInquiryNotes(`Inquiry from chat ${chat?.id || ''}`);
-                                  setInquiryName(chatDisplayName || '');
+                                  const nameParts = splitFullName(chatDisplayName || '');
+                                  setInquiryFirstName(nameParts.first);
+                                  setInquiryMiddleName(nameParts.middle);
+                                  setInquiryLastName(nameParts.last);
                                   setInquiryEmail(
                                     chat?.instagram_user?.email ||
                                     chat?.facebook_user?.email ||
@@ -1696,7 +1777,7 @@ const extractVariables = (content) => {
           </DialogContent>
         </Dialog>
         <Dialog open={showInquiryModal} onOpenChange={setShowInquiryModal}>
-          <DialogContent className="bg-[var(--tg-surface)] border border-[var(--tg-border-soft)] text-[var(--tg-text-primary)] sm:max-w-[900px]">
+          <DialogContent className="bg-[var(--tg-surface)] border border-[var(--tg-border-soft)] text-[var(--tg-text-primary)] sm:max-w-[900px] w-full max-h-[80vh] overflow-y-auto overflow-x-hidden">
             <DialogHeader>
               <DialogTitle>Create inquiry</DialogTitle>
               <DialogDescription className="text-[var(--tg-text-muted)]">
@@ -1704,18 +1785,11 @@ const extractVariables = (content) => {
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-3">
-              <div className="space-y-1">
-                <label className="text-xs text-[var(--tg-text-secondary)]">Name</label>
-                <Input
-                  value={inquiryName}
-                  onChange={(e) => setInquiryName(e.target.value)}
-                  placeholder="Contact name"
-                />
-              </div>
+              {/* Primary contact */}
               <div className="space-y-1">
                 <label className="text-xs text-[var(--tg-text-secondary)]">Phone number</label>
                 <div className="flex gap-2 flex-wrap items-center">
-                  {hasCountryOptions ? (
+                    {hasCountryOptions ? (
                     <Select
                       value={inquiryCountryCode}
                       onValueChange={(value) => {
@@ -1805,7 +1879,7 @@ const extractVariables = (content) => {
                     {duplicateCheckMessage}
                   </p>
                 )}
-                {phoneValidationMessage && (
+                {/* {phoneValidationMessage && (
                   <p
                     className={`text-xs ${
                       phoneValidationStatus === 'valid'
@@ -1815,7 +1889,7 @@ const extractVariables = (content) => {
                   >
                     {isValidatingPhone ? 'Validating...' : phoneValidationMessage}
                   </p>
-                )}
+                )} */}
                 {allowDuplicateAssignUI && (
                   <div className="pt-1">
                     {hasDuplicateCheck && (
@@ -1853,12 +1927,253 @@ const extractVariables = (content) => {
                         Employee ID not provided in duplicate response; cannot auto-assign.
                       </p>
                     )}
-                    {assignError && (
-                      <p className="text-xs text-amber-400 mt-1">{assignError}</p>
-                    )}
-                  </div>
+                {assignError && (
+                  <p className="text-xs text-amber-400 mt-1">{assignError}</p>
                 )}
               </div>
+            )}
+            {/* Extended inquiry fields */}
+            <div className="grid sm:grid-cols-3 gap-3">
+              <div className="space-y-1">
+                <label className="text-xs text-[var(--tg-text-secondary)]">First name</label>
+                <Input
+                  value={inquiryFirstName}
+                  onChange={(e) => setInquiryFirstName(e.target.value)}
+                    placeholder="First"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-[var(--tg-text-secondary)]">Middle name</label>
+                  <Input
+                    value={inquiryMiddleName}
+                    onChange={(e) => setInquiryMiddleName(e.target.value)}
+                    placeholder="Middle"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-[var(--tg-text-secondary)]">Last name</label>
+                  <Input
+                    value={inquiryLastName}
+                    onChange={(e) => setInquiryLastName(e.target.value)}
+                    placeholder="Last"
+                  />
+                </div>
+            </div>
+            <div className="grid sm:grid-cols-3 gap-3">
+              <div className="space-y-1">
+                <label className="text-xs text-[var(--tg-text-secondary)]">Contact 2 country code</label>
+                {hasCountryOptions ? (
+                  <Select
+                    value={inquiryContact2CountryCode || inquiryCountryCode}
+                    onValueChange={(value) => setInquiryContact2CountryCode(normalizeCountryCode(value))}
+                  >
+                    <SelectTrigger className="w-full" aria-busy={isLoadingCountries}>
+                      <SelectValue placeholder={isLoadingCountries ? 'Loading...' : 'Select country'} />
+                    </SelectTrigger>
+                    <SelectContent className="bg-[var(--tg-surface)] border-[var(--tg-border-soft)] max-h-72">
+                      {countryOptions.map((country) => (
+                        <SelectItem
+                          key={country.id || country.phonecode}
+                          value={country.phonecode}
+                          className="text-sm"
+                        >
+                          {country.name} ({country.phonecode})
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  <Input
+                    value={inquiryContact2CountryCode || inquiryCountryCode}
+                    onChange={(e) => setInquiryContact2CountryCode(normalizeCountryCode(e.target.value))}
+                    placeholder="+91"
+                  />
+                )}
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs text-[var(--tg-text-secondary)]">Contact 2 mobile</label>
+                <Input
+                  value={inquiryContact2Number}
+                    onChange={(e) => setInquiryContact2Number(normalizeLocalPhoneNumber(e.target.value))}
+                    inputMode="tel"
+                    placeholder="Alternate number"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-[var(--tg-text-secondary)]">Gender</label>
+                  <div className="flex items-center gap-3 text-[var(--tg-text-secondary)] text-sm">
+                    {['female', 'male', 'other'].map((val) => (
+                      <label key={val} className="flex items-center gap-1 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="inquiry-gender"
+                          value={val}
+                          checked={inquiryGender === val}
+                          onChange={() => setInquiryGender(val)}
+                        />
+                        <span className="capitalize">{val}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+            </div>
+            <div className="grid sm:grid-cols-3 gap-3">
+              <div className="space-y-1">
+                <label className="text-xs text-[var(--tg-text-secondary)]">DOB</label>
+                <Input
+                  type="date"
+                  value={inquiryDob}
+                  onChange={(e) => setInquiryDob(e.target.value)}
+                  max={todayStr}
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs text-[var(--tg-text-secondary)]">Country</label>
+                <Input
+                    value={inquiryCountry}
+                    onChange={(e) => setInquiryCountry(e.target.value)}
+                    placeholder="Country"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-[var(--tg-text-secondary)]">City</label>
+                  <Input
+                    value={inquiryCity}
+                    onChange={(e) => setInquiryCity(e.target.value)}
+                    placeholder="City"
+                  />
+                </div>
+            </div>
+            <div className="grid sm:grid-cols-3 gap-3">
+              <div className="space-y-1">
+                <label className="text-xs text-[var(--tg-text-secondary)]">Venue</label>
+                <Input
+                  value={inquiryVenue}
+                  onChange={(e) => setInquiryVenue(e.target.value)}
+                    placeholder="Venue"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-[var(--tg-text-secondary)]">Address</label>
+                  <Input
+                    value={inquiryAddress}
+                    onChange={(e) => setInquiryAddress(e.target.value)}
+                    placeholder="Street, area, town"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-[var(--tg-text-secondary)]">Pincode</label>
+                  <Input
+                    value={inquiryPincode}
+                    onChange={(e) => setInquiryPincode(e.target.value)}
+                    placeholder="123456"
+                  />
+                </div>
+            </div>
+            <div className="grid sm:grid-cols-3 gap-3">
+              <div className="space-y-1">
+                <label className="text-xs text-[var(--tg-text-secondary)]">Inquiry type</label>
+                <Input
+                  value={inquiryType}
+                  onChange={(e) => setInquiryType(e.target.value)}
+                    placeholder="e.g., Offline Right Brain Development"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-[var(--tg-text-secondary)]">Inquiry date</label>
+                  <Input
+                    type="date"
+                    value={inquiryDate}
+                    onChange={(e) => setInquiryDate(e.target.value)}
+                    max={todayStr}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-[var(--tg-text-secondary)]">Program</label>
+                  <Input
+                    value={inquiryProgram}
+                    onChange={(e) => setInquiryProgram(e.target.value)}
+                    placeholder="Program / Course"
+                  />
+                </div>
+            </div>
+            <div className="grid sm:grid-cols-3 gap-3">
+              <div className="space-y-1">
+                <label className="text-xs text-[var(--tg-text-secondary)]">Source</label>
+                <Input
+                  value={inquirySource}
+                  onChange={(e) => setInquirySource(e.target.value)}
+                    placeholder="Instagram, Message Ad..."
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-[var(--tg-text-secondary)]">Campaign / Tag</label>
+                  <Input
+                    value={inquiryCampaign}
+                    onChange={(e) => setInquiryCampaign(e.target.value)}
+                    placeholder="Campaign reference"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-[var(--tg-text-secondary)]">Status</label>
+                  <Input
+                    value={inquiryStatus}
+                    onChange={(e) => setInquiryStatus(e.target.value)}
+                    placeholder="Not contacted, etc."
+                  />
+                </div>
+            </div>
+            <div className="grid sm:grid-cols-3 gap-3">
+                <div className="space-y-1">
+                  <label className="text-xs text-[var(--tg-text-secondary)]">Follow-up date</label>
+                  <Input
+                    type="date"
+                    value={followUpDate}
+                    onChange={(e) => setFollowUpDate(e.target.value)}
+                    min={todayStr}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-[var(--tg-text-secondary)]">Follow-up time</label>
+                  <Input
+                    type="time"
+                    value={followUpTime}
+                    onChange={(e) => setFollowUpTime(e.target.value)}
+                    min={followUpDate === todayStr ? currentTimeStr : undefined}
+                  />
+                </div>
+              <div className="space-y-1 flex items-center gap-4">
+                <label className="text-xs text-[var(--tg-text-secondary)]">Flags</label>
+                <label className="flex items-center gap-1 text-sm text-[var(--tg-text-secondary)] cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={isBlogger}
+                      onChange={(e) => setIsBlogger(e.target.checked)}
+                    />
+                    Blogger
+                  </label>
+                  <label className="flex items-center gap-1 text-sm text-[var(--tg-text-secondary)] cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={autoAssignInquiry}
+                      onChange={(e) => setAutoAssignInquiry(e.target.checked)}
+                    />
+                    Auto assign inquiry
+                  </label>
+                  <label className="flex items-center gap-1 text-sm text-[var(--tg-text-secondary)] cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={isFranchisee}
+                      onChange={(e) => setIsFranchisee(e.target.checked)}
+                    />
+                    Franchisee
+                  </label>
+                </div>
+              </div>
+              {followUpError && (
+                <p className="text-xs text-amber-400">{followUpError}</p>
+              )}
+            </div>
               <div className="grid sm:grid-cols-2 gap-3">
                 <div className="space-y-1">
                   <label className="text-xs text-[var(--tg-text-secondary)]">Email</label>
@@ -1869,49 +2184,14 @@ const extractVariables = (content) => {
                     placeholder="user@example.com"
                   />
                 </div>
-                <div className="space-y-1">
+                {/* <div className="space-y-1">
                   <label className="text-xs text-[var(--tg-text-secondary)]">WhatsApp number</label>
                   <Input
                     value={inquiryWhatsApp}
                     onChange={(e) => setInquiryWhatsApp(e.target.value)}
                     placeholder="+1 555 000 0000"
                   />
-                </div>
-                <div className="space-y-1">
-                <label className="text-xs text-[var(--tg-text-secondary)]">Date of birth</label>
-                <Input
-                  type="date"
-                  value={inquiryDob}
-                  onChange={(e) => setInquiryDob(e.target.value)}
-                  max={new Date().toISOString().split('T')[0]}
-                />
-              </div>
-                <div className="space-y-1">
-                  <label className="text-xs text-[var(--tg-text-secondary)]">City</label>
-                  <Input
-                    value={inquiryCity}
-                    onChange={(e) => setInquiryCity(e.target.value)}
-                    placeholder="City"
-                  />
-                </div>
-              </div>
-              <div className="space-y-1">
-                <label className="text-xs text-[var(--tg-text-secondary)]">Address</label>
-                <Textarea
-                  value={inquiryAddress}
-                  onChange={(e) => setInquiryAddress(e.target.value)}
-                  placeholder="Street, area, zip"
-                  className="min-h-[70px] bg-[var(--tg-surface-muted)] border-[var(--tg-border-soft)]"
-                />
-              </div>
-              <div className="space-y-1">
-                <label className="text-xs text-[var(--tg-text-secondary)]">Notes</label>
-                <Textarea
-                  value={inquiryNotes}
-                  onChange={(e) => setInquiryNotes(e.target.value)}
-                  placeholder="Optional context for this inquiry"
-                  className="min-h-[90px] bg-[var(--tg-surface-muted)] border-[var(--tg-border-soft)]"
-                />
+                </div> */}
               </div>
             </div>
             <div className="flex justify-end gap-2 pt-2">
