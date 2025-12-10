@@ -335,6 +335,22 @@ const CreateInquiryModal = ({
     [normalizedInquiryPhone]
   );
 
+  const hasCountry = Boolean(selectedCountryId);
+  const hasCity = hasCountry ? Boolean(selectedCityId) : false;
+  const venueOk = venueOptions.length > 0 ? Boolean(selectedVenueId) : Boolean(inquiryVenue);
+  const followupOk = Boolean(followUpDate) && Boolean(followUpTime) && !followUpError;
+  const inquiryDateOk = Boolean(inquiryDate);
+  const categoryOk = Boolean(inquiryType);
+  const statusOk = Boolean(inquiryStatus);
+  const requiredFieldsOk =
+    hasCountry &&
+    hasCity &&
+    venueOk &&
+    followupOk &&
+    inquiryDateOk &&
+    categoryOk &&
+    statusOk;
+
   const isPhoneInvalid =
     phoneValidationStatus === 'invalid' ||
     phoneValidationStatus === 'error' ||
@@ -346,7 +362,8 @@ const CreateInquiryModal = ({
     duplicateCheckStatus === 'ok' &&
     !isCheckingDuplicate &&
     !isPhoneInvalid &&
-    !followUpError;
+    !followUpError &&
+    requiredFieldsOk;
 
   useEffect(() => {
     countryOptionsRef.current = countryOptions;
@@ -529,6 +546,12 @@ const CreateInquiryModal = ({
   }, [followUpDate, followUpTime, todayStr]);
 
   const handleSubmitInquiry = useCallback(async () => {
+    if (!requiredFieldsOk) {
+      if (!followUpDate || !followUpTime) {
+        setFollowUpError((prev) => prev || 'Please select follow-up date and time.');
+      }
+      return;
+    }
     // Enforce dropdown-only values for country, city, and venue (when options exist)
     const countryMatch = countryOptions.find((c) => String(c.id) === String(selectedCountryId));
     const cityMatch = cityOptions.find((c) => String(c.id) === String(selectedCityId));
@@ -607,7 +630,7 @@ const CreateInquiryModal = ({
         interest_string: inquiryStatus || 'Not Contacted',
         preferences: '',
         slot: '',
-        area: inquiryAddress || '',
+        area: selectedVenueId === '0' ? inquiryAddress || '' : '',
         pincode: inquiryPincode || '',
         employee_id: duplicateAgentEmpId || '',
         time: followUpTime ? `${followUpTime}:00` : '',
@@ -808,9 +831,13 @@ const CreateInquiryModal = ({
           name: v.display_name || v.venue || '',
           rawVenue: v.venue,
         }));
-        setVenueOptions(venues);
-        if (venues.length > 0) {
-          const first = venues[0];
+        const enhanced = [
+          { id: '0', name: 'No Venue', rawVenue: '' },
+          ...venues,
+        ];
+        setVenueOptions(enhanced);
+        if (enhanced.length > 0) {
+          const first = enhanced[0];
           setSelectedVenueId(first.id || '');
           setInquiryVenue(first.name || first.rawVenue || '');
         }
@@ -1339,9 +1366,18 @@ const CreateInquiryModal = ({
                     disabled={isLoadingVenues}
                   />
                 )}
+                {selectedVenueId === '0' && (
+                  <Input
+                    {...AUTOFILL_PROPS}
+                    value={inquiryAddress}
+                    onChange={(e) => setInquiryAddress(e.target.value)}
+                    placeholder="Enter area (required when no venue)"
+                    className="mt-2"
+                  />
+                )}
                 {venueError && <p className="text-xs text-amber-400">{venueError}</p>}
               </div>
-              <div className="space-y-1">
+              {/* <div className="space-y-1">
                 <label className="text-xs text-[var(--tg-text-secondary)]">Address</label>
                 <Input
                   {...AUTOFILL_PROPS}
@@ -1349,7 +1385,7 @@ const CreateInquiryModal = ({
                   onChange={(e) => setInquiryAddress(e.target.value)}
                   placeholder="Street, area, town"
                 />
-              </div>
+              </div> */}
               <div className="space-y-1">
                 <label className="text-xs text-[var(--tg-text-secondary)]">Pincode</label>
                 <Input
