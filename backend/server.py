@@ -1,4 +1,5 @@
 from fastapi import FastAPI, APIRouter, Depends, HTTPException, status, Header, Request, Query, WebSocket, WebSocketDisconnect, Response
+from starlette.requests import ClientDisconnect
 from starlette.websockets import WebSocketState
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -132,6 +133,16 @@ class DuplicateMobileCheckRequest(BaseModel):
     mobile: str
     country_code: Optional[str] = None
     not_in_group: Optional[str] = None
+
+class InquiryInsertRequest(BaseModel):
+    inquiry: Dict[str, Any]
+    followup: Dict[str, Any]
+    form_token: Optional[str] = None
+    contact_id: Optional[int] = 0
+    bid: Optional[str] = None
+    comment: Optional[str] = None
+    existingContact: Optional[bool] = False  # noqa: N815
+    updateContact: Optional[bool] = True    # noqa: N815
 
 class PhoneValidationRequest(BaseModel):
     country_code: str
@@ -344,6 +355,240 @@ async def select_employee(
     except requests.RequestException as exc:
         logging.exception("Select employee failed: %s", exc)
         raise HTTPException(status_code=502, detail="Failed to select employee")
+
+
+def _call_admin_venue_api(city: str) -> Dict[str, Any]:
+    admin_url = os.environ.get("ADMIN_URL")
+    form_token = os.environ.get("FORM_TOKEN")
+    uid = os.environ.get("UID")
+    bid = os.environ.get("BID")
+    auth_header = os.environ.get("AUTHORIZATION")
+
+    if not admin_url or not form_token or not uid or not bid:
+        raise HTTPException(status_code=500, detail="Venue config missing in environment")
+
+    target = admin_url.rstrip("/") + "/routes/venueRoute.php?action=getVenues"
+    data = {
+        "form_token": form_token,
+        "city": city,
+    }
+    headers = {
+        "uid": uid,
+        "bid": bid,
+        "Content-Type": "application/json",
+    }
+    if auth_header:
+        headers["Authorization"] = auth_header
+    admin_cookie = os.environ.get("ADMIN_COOKIE")
+    if admin_cookie:
+        headers["Cookie"] = admin_cookie
+
+    try:
+        resp = requests.post(
+            target,
+            json=data,
+            headers=headers,
+            timeout=10,
+        )
+        if resp.status_code >= 400:
+            logging.warning("Venue API bad status %s: %s", resp.status_code, resp.text)
+            raise HTTPException(status_code=resp.status_code, detail="Failed to fetch venues")
+        try:
+            return resp.json()
+        except ValueError:
+            logging.warning("Venue API non-JSON response: %s", resp.text)
+            return {"data": [], "error": 1, "error_msg": "Invalid response from admin", "raw": resp.text}
+    except requests.RequestException as exc:
+        logging.exception("Venue API call failed: %s", exc)
+        raise HTTPException(status_code=502, detail="Failed to fetch venues")
+
+
+@api_router.get("/venues")
+def list_venues(city: str = Query("", alias="city")):
+    if not city:
+        raise HTTPException(status_code=400, detail="city is required")
+    return _call_admin_venue_api(city)
+
+
+def _call_admin_category_api() -> Dict[str, Any]:
+    admin_url = os.environ.get("ADMIN_URL")
+    form_token = os.environ.get("FORM_TOKEN")
+    # uid = os.environ.get("UID")
+    # bid = os.environ.get("BID")
+    auth_header = os.environ.get("AUTHORIZATION")
+
+    if not admin_url or not form_token:
+        raise HTTPException(status_code=500, detail="Category config missing in environment")
+
+    target = admin_url.rstrip("/") + "/routes/settingRoute.php?action=getSetting"
+    data = {
+        "form_token": form_token,
+        "col": ["id", "category"],
+        "table": "category",
+        "filter": [
+            ["bid", "=", 27],
+            ["park", "=", "0"],
+        ],
+    }
+    headers = {
+        # "uid": uid,
+        # "bid": bid,
+        "Content-Type": "application/json",
+    }
+    if auth_header:
+        headers["Authorization"] = auth_header
+    admin_cookie = os.environ.get("ADMIN_COOKIE")
+    if admin_cookie:
+        headers["Cookie"] = admin_cookie
+
+    try:
+        resp = requests.post(
+            target,
+            json=data,
+            headers=headers,
+            timeout=10,
+        )
+        if resp.status_code >= 400:
+            logging.warning("Category API bad status %s: %s", resp.status_code, resp.text)
+            raise HTTPException(status_code=resp.status_code, detail="Failed to fetch categories")
+        try:
+            return resp.json()
+        except ValueError:
+            logging.warning("Category API non-JSON response: %s", resp.text)
+            return {"data": [], "error": 1, "error_msg": "Invalid response from admin", "raw": resp.text}
+    except requests.RequestException as exc:
+        logging.exception("Category API call failed: %s", exc)
+        raise HTTPException(status_code=502, detail="Failed to fetch categories")
+
+
+@api_router.get("/inquiry-categories")
+def list_inquiry_categories():
+    return _call_admin_category_api()
+
+
+def _call_admin_followup_interest_api() -> Dict[str, Any]:
+    admin_url = os.environ.get("ADMIN_URL")
+    form_token = os.environ.get("FORM_TOKEN")
+    # uid = os.environ.get("UID")
+    auth_header = os.environ.get("AUTHORIZATION")
+
+    if not admin_url or not form_token  :
+        raise HTTPException(status_code=500, detail="Followup interest config missing in environment")
+
+    target = admin_url.rstrip("/") + "/routes/settingRoute.php?action=getSetting"
+    data = {
+        "form_token": form_token,
+        "col": ["id", "interest"],
+        "table": "followup_interest",
+        "filter": [
+            ["park", "=", "0"],
+        ],
+    }
+    headers = {
+        "Content-Type": "application/json",
+    }
+    if auth_header:
+        headers["Authorization"] = auth_header
+    admin_cookie = os.environ.get("ADMIN_COOKIE")
+    if admin_cookie:
+        headers["Cookie"] = admin_cookie
+
+    try:
+        resp = requests.post(
+            target,
+            json=data,
+            headers=headers,
+            timeout=10,
+        )
+        if resp.status_code >= 400:
+            logging.warning("Followup interest API bad status %s: %s", resp.status_code, resp.text)
+            raise HTTPException(status_code=resp.status_code, detail="Failed to fetch follow-up interests")
+        try:
+            return resp.json()
+        except ValueError:
+            logging.warning("Followup interest API non-JSON response: %s", resp.text)
+            return {"data": [], "error": 1, "error_msg": "Invalid response from admin", "raw": resp.text}
+    except requests.RequestException as exc:
+        logging.exception("Followup interest API call failed: %s", exc)
+        raise HTTPException(status_code=502, detail="Failed to fetch follow-up interests")
+
+
+@api_router.get("/followup-interests")
+def list_followup_interests():
+    return _call_admin_followup_interest_api()
+
+@api_router.post("/inquiries/insert")
+def insert_inquiry(
+    payload: InquiryInsertRequest,
+    response: Response,
+    current_user: User = Depends(get_current_user),
+):
+    admin_url = os.environ.get("ADMIN_URL")
+    form_token = payload.form_token or os.environ.get("FORM_TOKEN")
+    bid = payload.bid or os.environ.get("BID")
+    admin_cookie = os.environ.get("ADMIN_COOKIE")
+    emp_id = payload.inquiry.get("employee_id") or getattr(current_user, "emp_id", None)
+
+    if not admin_url or not form_token or not bid:
+        raise HTTPException(status_code=500, detail="Inquiry insert config missing in environment")
+    if not emp_id:
+        raise HTTPException(status_code=400, detail="Employee ID is required to create inquiry")
+    if not payload.inquiry.get("mobile"):
+        raise HTTPException(status_code=400, detail="Mobile is required to create inquiry")
+
+    session = requests.Session()
+    headers = {
+        "bid": bid,
+        "Content-Type": "application/json",
+    }
+    if admin_cookie:
+        headers["Cookie"] = admin_cookie
+
+    # Ensure employee is selected (sets server-side context/cookies) and capture user_id
+    resolved_uid = None
+    try:
+        select_target = admin_url.rstrip("/") + "/routes/employeeRoute.php?action=select"
+        select_data = {
+            "form_token": form_token,
+            "col": ["id", "user_id"],
+            "filter": [["emp_id", "=", emp_id]],
+            "groupby": "emp_id",
+        }
+        select_headers = {**headers, "uid": os.environ.get("UID") or ""}
+        select_resp = session.post(select_target, json=select_data, headers=select_headers, timeout=10)
+        if select_resp.ok:
+            try:
+                select_json = select_resp.json()
+                if isinstance(select_json, dict):
+                    rows = select_json.get("data") or []
+                    if isinstance(rows, list) and rows:
+                        resolved_uid = rows[0].get("user_id") or resolved_uid
+            except Exception:
+                pass
+    except Exception as exc:
+        logging.warning("Employee select failed prior to inquiry insert: %s", exc)
+    headers["uid"] = resolved_uid or os.environ.get("UID") or ""
+
+    insert_target = admin_url.rstrip("/") + "/routes/inquiryRoute.php?action=insert"
+    request_body = payload.model_dump()
+    # Enforce env tokens/bid
+    request_body["form_token"] = form_token
+    request_body["bid"] = bid
+
+    try:
+        resp = session.post(insert_target, json=request_body, headers=headers, timeout=20)
+        if resp.status_code >= 400:
+            logging.warning("Inquiry insert bad status %s: %s", resp.status_code, resp.text)
+            raise HTTPException(status_code=resp.status_code, detail="Failed to create inquiry")
+        result = resp.json()
+        # Bubble up cookies if needed downstream
+        if response is not None and resp.cookies:
+            for key, val in resp.cookies.items():
+                response.set_cookie(key=key, value=val, httponly=False, samesite="Lax")
+        return result
+    except requests.RequestException as exc:
+        logging.exception("Inquiry insert failed: %s", exc)
+        raise HTTPException(status_code=502, detail="Failed to create inquiry")
     
 @api_router.post("/validate-phone")
 def validate_phone(request: PhoneValidationRequest):
@@ -458,8 +703,90 @@ def list_countries(db: Session = Depends(get_db)):
                 "phonecode": f"+{digits}",
                 "timezones": zone_names,
             }
-        )
+    )
     return countries
+
+
+@api_router.get("/cities")
+def list_cities(
+    country: str = Query("", alias="country"),
+    db: Session = Depends(get_db)
+):
+    """
+    List cities for a given country. Expects a country identifier (id) matching the cities.country_id column.
+    """
+    if not country:
+        raise HTTPException(status_code=400, detail="country is required")
+
+    tickle_db = os.environ.get("MYSQL_DATABASE_TickleRight") or os.environ.get("MYSQL_DATABASE_TICKLERIGHT")
+    safe_db = re.sub(r"[^A-Za-z0-9_]", "", tickle_db or "")
+    table_ref = f"`{safe_db}`.cities" if safe_db else "cities"
+
+    sql = text(
+        f"""
+        SELECT id, name
+        FROM {table_ref}
+        WHERE country_id = :country
+        ORDER BY name ASC
+        """
+    )
+    try:
+        rows = db.execute(sql, {"country": country}).fetchall()
+    except Exception as exc:
+        logging.exception("Failed to fetch cities: %s", exc)
+        raise HTTPException(status_code=500, detail="Failed to load cities")
+
+    cities = []
+    for row in rows:
+        data = row._mapping if hasattr(row, "_mapping") else row
+        cities.append(
+            {
+                "id": str(data.get("id")),
+                "name": data.get("name"),
+            }
+        )
+    return {"data": cities}
+
+
+@api_router.get("/cities")
+def list_cities(
+    country: str = Query("", alias="country"),
+    db: Session = Depends(get_db)
+):
+    """
+    List cities for a given country. Expects a country identifier (id) matching the cities.country_id column.
+    """
+    if not country:
+        raise HTTPException(status_code=400, detail="country is required")
+
+    tickle_db = os.environ.get("MYSQL_DATABASE_TickleRight") or os.environ.get("MYSQL_DATABASE_TICKLERIGHT")
+    safe_db = re.sub(r"[^A-Za-z0-9_]", "", tickle_db or "")
+    table_ref = f"`{safe_db}`.cities" if safe_db else "cities"
+
+    sql = text(
+        f"""
+        SELECT id, name
+        FROM {table_ref}
+        WHERE country_id = :country
+        ORDER BY name ASC
+        """
+    )
+    try:
+        rows = db.execute(sql, {"country": country}).fetchall()
+    except Exception as exc:
+        logging.exception("Failed to fetch cities: %s", exc)
+        raise HTTPException(status_code=500, detail="Failed to load cities")
+
+    cities = []
+    for row in rows:
+        data = row._mapping if hasattr(row, "_mapping") else row
+        cities.append(
+            {
+                "id": str(data.get("id")),
+                "name": data.get("name"),
+            }
+        )
+    return {"data": cities}
 
 # Configure logging
 logging.basicConfig(
@@ -2719,10 +3046,18 @@ async def instagram_dm_verify(
 async def _handle_instagram_webhook(request: Request, db: Session) -> Dict[str, Any]:
     """Shared webhook handler for Instagram DM events."""
     try:
-        body = await request.body()
+        try:
+            body = await request.body()
+        except ClientDisconnect:
+            logger.warning("Instagram webhook client disconnected before sending body; ignoring request")
+            return {"status": "ignored", "reason": "client_disconnected"}
 
-        signature_sha256 = request.headers.get("X-Hub-Signature-256")
-        signature_sha1 = request.headers.get("X-Hub-Signature")
+        if not body:
+            logger.warning("Instagram webhook received empty body; ignoring request")
+            return {"status": "ignored", "reason": "empty_body"}
+
+        # signature_sha256 = request.headers.get("X-Hub-Signature-256")
+        # signature_sha1 = request.headers.get("X-Hub-Signature")
         # if not instagram_client.verify_webhook_signature(body, signature_sha256, signature_sha1):
         #     logger.warning("Invalid Instagram webhook signature")
         #     raise HTTPException(status_code=401, detail="Invalid signature")
