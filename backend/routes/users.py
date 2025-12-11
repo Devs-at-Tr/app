@@ -35,6 +35,7 @@ from schemas import (
     PositionResponse,
     PositionUpdate,
     UserActiveUpdate,
+    UserChatRoutingUpdate,
     UserPositionUpdate,
     UserResponse,
     UserRosterEntry,
@@ -87,8 +88,8 @@ def list_agents(
     if not include_inactive:
         query = query.filter(User.is_active.is_(True))
     agents = query.all()
-    assignable = [agent for agent in agents if _is_assignable_agent(agent)]
-    return [_annotate_user(agent) for agent in assignable]
+    # Return all active agents (including those paused from auto-assignment)
+    return [_annotate_user(agent) for agent in agents]
 
 
 @router.get("/users/roster", response_model=List[UserRosterEntry])
@@ -96,7 +97,6 @@ def user_roster(
     current_user: User = Depends(require_any_permissions(
         PermissionCode.POSITION_ASSIGN,
         PermissionCode.POSITION_MANAGE,
-        PermissionCode.CHAT_ASSIGN,
     )),
     db: Session = Depends(get_db)
 ):
@@ -179,6 +179,25 @@ def update_user_active_state(
     return UserResponse.model_validate(_annotate_user(user))
 
 
+@router.patch("/users/{user_id}/chat-routing", response_model=UserResponse)
+def update_user_chat_routing(
+    user_id: str,
+    payload: UserChatRoutingUpdate,
+    current_user: User = Depends(require_permissions(PermissionCode.POSITION_MANAGE)),
+    db: Session = Depends(get_db)
+):
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if user.role != UserRole.AGENT:
+        raise HTTPException(status_code=400, detail="Only agent accounts can receive chat assignments")
+
+    user.can_receive_new_chats = payload.can_receive_new_chats
+    db.commit()
+    db.refresh(user)
+    return UserResponse.model_validate(_annotate_user(user))
+
+
 @router.post("/admin/users", response_model=UserResponse)
 def admin_create_user(
     user_data: AdminUserCreate,
@@ -221,6 +240,9 @@ def admin_create_user(
         emp_id=emp_id,
         password_hash=get_password_hash(user_data.password),
         role=user_data.role or UserRole.AGENT,
+        can_receive_new_chats=True
+        if user_data.can_receive_new_chats is None
+        else bool(user_data.can_receive_new_chats),
     )
     position = _resolve_position_for_user(db, user_data.role, user_data.position_id)
     if position:

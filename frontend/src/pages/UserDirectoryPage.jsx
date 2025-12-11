@@ -31,6 +31,13 @@ const UserDirectoryPage = ({ user, onLogout }) => {
     userName: '',
     nextState: true,
   });
+  const [chatToggle, setChatToggle] = useState({
+    open: false,
+    userId: null,
+    userName: '',
+    nextState: true,
+  });
+  const [chatToggleLoadingId, setChatToggleLoadingId] = useState(null);
   const [resetModal, setResetModal] = useState({
     open: false,
     userId: null,
@@ -45,7 +52,7 @@ const UserDirectoryPage = ({ user, onLogout }) => {
   const canManageIntegrations = useMemo(() => hasPermission(user, 'integration:manage'), [user]);
   const canManagePositions = useMemo(() => hasPermission(user, 'position:manage'), [user]);
   const canViewUserRoster = useMemo(
-    () => hasAnyPermission(user, ['position:assign', 'position:manage', 'chat:assign']),
+    () => hasAnyPermission(user, ['position:assign', 'position:manage']),
     [user]
   );
   const canAssignPositions = useMemo(() => hasPermission(user, 'position:assign'), [user]);
@@ -140,6 +147,18 @@ const UserDirectoryPage = ({ user, onLogout }) => {
     []
   );
 
+  const handleToggleReceiveChats = useCallback(
+    (userId, nextState, userName) => {
+      setChatToggle({
+        open: true,
+        userId,
+        userName: userName || 'this agent',
+        nextState,
+      });
+    },
+    []
+  );
+
   const confirmToggleAction = useCallback(async () => {
     if (!confirmToggle.userId) return;
     try {
@@ -160,6 +179,36 @@ const UserDirectoryPage = ({ user, onLogout }) => {
       setConfirmToggle({ open: false, userId: null, userName: '', nextState: true });
     }
   }, [confirmToggle, loadUserRoster]);
+
+  const confirmChatToggleAction = useCallback(async () => {
+    if (!chatToggle.userId) return;
+    setChatToggleLoadingId(chatToggle.userId);
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        throw new Error('No authentication token found');
+      }
+      await axios.patch(
+        `${API}/users/${chatToggle.userId}/chat-routing`,
+        { can_receive_new_chats: chatToggle.nextState },
+        { headers: { Authorization: `Bearer ${token}` }, timeout: 30000 }
+      );
+      setError('');
+      setChatToggle({ open: false, userId: null, userName: '', nextState: true });
+      await loadUserRoster();
+    } catch (toggleError) {
+      console.error('Error updating chat routing:', toggleError);
+      setError(
+        toggleError.response?.data?.detail ||
+          toggleError.message ||
+          'Unable to update chat routing'
+      );
+      setChatToggle((prev) => ({ ...prev, open: false }));
+      await loadUserRoster();
+    } finally {
+      setChatToggleLoadingId(null);
+    }
+  }, [chatToggle, loadUserRoster]);
 
   const handleAssignPosition = useCallback(
     async (userId, positionId) => {
@@ -260,6 +309,37 @@ const UserDirectoryPage = ({ user, onLogout }) => {
             </AlertDialogContent>
           </AlertDialog>
 
+          <AlertDialog open={chatToggle.open} onOpenChange={(open) => !open && setChatToggle({ open: false, userId: null, userName: '', nextState: true })}>
+            <AlertDialogContent className="bg-[var(--tg-surface)] border border-[var(--tg-border-soft)] text-[var(--tg-text-primary)]">
+              <AlertDialogHeader>
+                <AlertDialogTitle>
+                  {chatToggle.nextState ? 'Allow new chat assignments?' : 'Pause new chat assignments?'}
+                </AlertDialogTitle>
+                <AlertDialogDescription className="text-[var(--tg-text-muted)]">
+                  {chatToggle.nextState
+                    ? 'Allow this agent to start receiving new chat assignments again?'
+                    : 'Pause new chat assignments for this agent? They will stop receiving new chats until you enable this again.'}
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel className="bg-transparent border border-[var(--tg-border-soft)] text-[var(--tg-text-primary)]">
+                  Cancel
+                </AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={confirmChatToggleAction}
+                  disabled={!!chatToggleLoadingId}
+                  className="bg-gradient-to-r from-purple-500 via-pink-500 to-orange-400 text-white"
+                >
+                  {chatToggleLoadingId
+                    ? 'Saving...'
+                    : chatToggle.nextState
+                    ? 'Yes, allow'
+                    : 'Yes, pause'}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+
           <AlertDialog open={resetModal.open} onOpenChange={(open) => !open && closeResetModal()}>
             <AlertDialogContent className="bg-[var(--tg-surface)] border border-[var(--tg-border-soft)] text-[var(--tg-text-primary)]">
               <AlertDialogHeader>
@@ -325,6 +405,9 @@ const UserDirectoryPage = ({ user, onLogout }) => {
               onAssignPosition={handleAssignPosition}
               onToggleActive={handleToggleActive}
               canToggleActive={canManagePositions}
+              onToggleReceiveChats={handleToggleReceiveChats}
+              canToggleReceiveChats={canManagePositions}
+              chatToggleBusyUserId={chatToggleLoadingId}
               canResetPasswords={user?.role === 'admin'}
               onResetPassword={openResetModal}
             />

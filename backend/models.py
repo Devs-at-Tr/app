@@ -118,6 +118,7 @@ class User(Base):
     )
     position_id = Column(String(36), ForeignKey("positions.id"), nullable=True, index=True)
     is_active = Column(Boolean, nullable=False, default=True, server_default="1")
+    can_receive_new_chats = Column(Boolean, nullable=False, default=True, server_default="1")
     created_at = Column(
         DateTime(timezone=True),
         nullable=False,

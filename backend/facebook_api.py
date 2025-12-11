@@ -585,7 +585,9 @@ class FacebookMessengerClient:
         url = f"{self.BASE_URL}/{user_id}"
         
         params = {
-            "fields": "id,name,first_name,last_name,profile_pic,profile_pic_url",
+            # profile_pic_url is no longer available on User nodes in newer Graph versions.
+            # Use picture{url} and profile_pic (legacy) for compatibility.
+            "fields": "id,name,first_name,last_name,picture{url},profile_pic",
             "access_token": page_access_token
         }
         try:
@@ -599,13 +601,20 @@ class FacebookMessengerClient:
                 if not full_name:
                     full_name = f"Facebook User {user_id[:8]}"
 
+                picture_url = (
+                    profile_data.get("profile_pic")
+                    or profile_data.get("profile_pic_url")
+                    or (profile_data.get("picture") or {}).get("data", {}).get("url")
+                )
+
                 return {
                     "success": True,
                     "id": profile_data.get("id", user_id),
                     "name": full_name,
                     "first_name": first_name or None,
                     "last_name": last_name or None,
-                    "profile_pic": profile_data.get("profile_pic") or profile_data.get("profile_pic_url"),
+                    "profile_pic": picture_url,
+                    "profile_pic_url": picture_url,
                     "raw": profile_data,
                     "mode": "real"
                 }

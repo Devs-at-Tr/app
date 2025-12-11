@@ -7,12 +7,64 @@ import { Search } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { API } from '../App';
 
+const NO_VENUE_VALUE = 'no-venue';
+
 const AUTOFILL_PROPS = {
   autoComplete: 'off',
   autoCorrect: 'off',
   autoCapitalize: 'off',
   spellCheck: false,
   name: 'no-autofill',
+};
+
+const TextInputWithClear = ({
+  value,
+  onChange,
+  placeholder = '',
+  type = 'text',
+  className = '',
+  onBlur,
+  ariaLabel,
+  ...rest
+}) => {
+  const inputRef = useRef(null);
+  const showClear = Boolean(value);
+
+  const handleClear = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    onChange?.({ target: { value: '' } });
+    // keep focus on the input
+    if (inputRef.current) {
+      inputRef.current.focus();
+    }
+  };
+
+  return (
+    <div className="relative">
+      <Input
+        ref={inputRef}
+        value={value}
+        onChange={onChange}
+        placeholder={placeholder}
+        type={type}
+        onBlur={onBlur}
+        className={className}
+        {...AUTOFILL_PROPS}
+        {...rest}
+      />
+      {showClear && (
+        <button
+          type="button"
+          onClick={handleClear}
+          className="absolute inset-y-0 right-2 flex items-center text-[var(--tg-text-muted)] hover:text-[var(--tg-text-primary)] focus:outline-none"
+          aria-label={ariaLabel || 'Clear field'}
+        >
+          ×
+        </button>
+      )}
+    </div>
+  );
 };
 
 const SearchableSelect = ({
@@ -22,10 +74,14 @@ const SearchableSelect = ({
   placeholder = 'Select...',
   disabled = false,
   busy = false,
+  openOnFocus = true,
+  hasError = false,
+  onBlur: onBlurProp,
 }) => {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const containerRef = useRef(null);
+  const inputRef = useRef(null);
 
   const selectedLabel = useMemo(() => {
     const found = options.find((opt) => String(opt.value) === String(value));
@@ -78,27 +134,58 @@ const SearchableSelect = ({
       if (query && query !== selectedLabel) {
         setQuery('');
         if (value) {
-          onChange?.('');
+          onChange?.(null);
         }
       }
       setOpen(false);
+      onBlurProp?.();
     }, 0);
   };
 
   return (
     <div className="relative" ref={containerRef}>
       <Input
+        ref={inputRef}
         {...AUTOFILL_PROPS}
         value={query}
         onChange={(e) => {
           setQuery(e.target.value);
           setOpen(true);
         }}
-        onFocus={() => setOpen(true)}
+        onFocus={() => {
+          if (openOnFocus) {
+            setOpen(true);
+          }
+        }}
+        onMouseDown={() => setOpen(true)}
         onBlur={handleBlur}
         placeholder={placeholder}
         disabled={disabled || busy}
+        className={cn(
+          value ? 'pr-8' : '',
+          hasError
+            ? 'border-red-500 focus-visible:ring-red-500 focus-visible:ring-2 focus-visible:ring-offset-0'
+            : '',
+        )}
       />
+      {value && (
+        <button
+          type="button"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => {
+            setQuery('');
+            onChange?.(null);
+            setOpen(true);
+            setTimeout(() => {
+              inputRef.current?.focus();
+            }, 0);
+          }}
+          className="absolute inset-y-0 right-2 flex items-center text-[var(--tg-text-muted)] hover:text-[var(--tg-text-primary)] focus:outline-none"
+          aria-label="Clear selection"
+        >
+          ×
+        </button>
+      )}
       {open && !disabled && (
         <div className="absolute z-10 mt-1 w-full rounded-md border border-[var(--tg-border-soft)] bg-[var(--tg-surface)] shadow-lg max-h-56 overflow-auto">
           {filtered.length > 0 ? (
@@ -265,7 +352,7 @@ const CreateInquiryModal = ({
   }, []);
 
   const [inquiryNumber, setInquiryNumber] = useState('');
-  const [inquiryNotes, setInquiryNotes] = useState('');
+  const [inquiryNotes, setInquiryNotes] = useState('Inquiry from Ticklegram chat ');
   const [inquiryEmail, setInquiryEmail] = useState('');
   const [inquiryCity, setInquiryCity] = useState('');
   const [inquiryAddress, setInquiryAddress] = useState('');
@@ -281,15 +368,15 @@ const CreateInquiryModal = ({
   const [inquiryContact2Number, setInquiryContact2Number] = useState('');
   const [inquiryGender, setInquiryGender] = useState('male');
   const [inquiryVenue, setInquiryVenue] = useState('');
-  const [selectedVenueId, setSelectedVenueId] = useState('');
+  const [selectedVenueId, setSelectedVenueId] = useState(null);
   const [inquiryPincode, setInquiryPincode] = useState('');
-  const [inquiryType, setInquiryType] = useState('');
+  const [inquiryType, setInquiryType] = useState(null);
   const [inquiryCategoryOptions, setInquiryCategoryOptions] = useState([]);
   const [isLoadingCategories, setIsLoadingCategories] = useState(false);
   const [inquiryDate, setInquiryDate] = useState(todayStr);
   const [inquirySource, setInquirySource] = useState('19');
   const [inquiryCampaign, setInquiryCampaign] = useState('');
-  const [inquiryProgram, setInquiryProgram] = useState('');
+  const [inquiryProgram, setInquiryProgram] = useState(null);
   const [followUpDate, setFollowUpDate] = useState(tomorrowStr);
   const [followUpTime, setFollowUpTime] = useState('11:00');
   const [inquiryStatus, setInquiryStatus] = useState('Not Contacted');
@@ -308,7 +395,10 @@ const CreateInquiryModal = ({
   const [venueOptions, setVenueOptions] = useState([]);
   const [isLoadingVenues, setIsLoadingVenues] = useState(false);
   const [venueError, setVenueError] = useState('');
+  const [touched, setTouched] = useState({});
+  const [attemptedSubmit, setAttemptedSubmit] = useState(false);
   const [hasAutoSetCountry, setHasAutoSetCountry] = useState(false);
+  const [hasCategoryInteraction, setHasCategoryInteraction] = useState(false);
   const hasCountryOptions = countryOptions.length > 0;
   const [duplicateCheckStatus, setDuplicateCheckStatus] = useState(null); // null | 'ok' | 'duplicate' | 'error'
   const [duplicateCheckMessage, setDuplicateCheckMessage] = useState('');
@@ -337,19 +427,74 @@ const CreateInquiryModal = ({
 
   const hasCountry = Boolean(selectedCountryId);
   const hasCity = hasCountry ? Boolean(selectedCityId) : false;
-  const venueOk = venueOptions.length > 0 ? Boolean(selectedVenueId) : Boolean(inquiryVenue);
+  const venueOk = venueOptions.length > 0 ? selectedVenueId !== null : Boolean(inquiryVenue);
   const followupOk = Boolean(followUpDate) && Boolean(followUpTime) && !followUpError;
   const inquiryDateOk = Boolean(inquiryDate);
   const categoryOk = Boolean(inquiryType);
   const statusOk = Boolean(inquiryStatus);
+  const areaOk = selectedVenueId === NO_VENUE_VALUE ? Boolean((inquiryAddress || '').trim()) : true;
   const requiredFieldsOk =
     hasCountry &&
     hasCity &&
     venueOk &&
+    areaOk &&
     followupOk &&
     inquiryDateOk &&
     categoryOk &&
     statusOk;
+
+  const markTouched = (field) => setTouched((prev) => ({ ...prev, [field]: true }));
+
+  const requiredErrors = useMemo(() => {
+    const errors = {};
+    if (!inquiryNumber || !inquiryPhoneIsValid) {
+      errors.phone = !inquiryNumber ? 'Phone number is required' : 'Enter a valid phone number';
+    }
+    if (!selectedCountryId) {
+      errors.country = 'Please select a country';
+    }
+    if (!selectedCityId) {
+      errors.city = 'Please select a city';
+    }
+    if (!venueOk) {
+      errors.venue = venueOptions.length > 0 ? 'Please select a venue' : 'Please enter a venue';
+    }
+    if (selectedVenueId === NO_VENUE_VALUE && !(inquiryAddress || '').trim()) {
+      errors.area = 'Area is required when no venue is selected';
+    }
+    if (!inquiryType) {
+      errors.category = 'Please choose a category';
+    }
+    if (!inquiryDate) {
+      errors.inquiryDate = 'Please pick an inquiry date';
+    }
+    if (!followUpDate) {
+      errors.followUpDate = 'Please pick a follow-up date';
+    }
+    if (!followUpTime) {
+      errors.followUpTime = 'Please pick a follow-up time';
+    }
+    if (!inquiryStatus) {
+      errors.status = 'Please select a status';
+    }
+    return errors;
+  }, [
+    inquiryNumber,
+    inquiryPhoneIsValid,
+    selectedCountryId,
+    selectedCityId,
+    venueOk,
+    venueOptions.length,
+    selectedVenueId,
+    inquiryAddress,
+    inquiryType,
+    inquiryDate,
+    followUpDate,
+    followUpTime,
+    inquiryStatus,
+  ]);
+
+  const shouldShowError = (field) => (attemptedSubmit || touched[field]) && requiredErrors[field];
 
   const isPhoneInvalid =
     phoneValidationStatus === 'invalid' ||
@@ -368,6 +513,13 @@ const CreateInquiryModal = ({
   useEffect(() => {
     countryOptionsRef.current = countryOptions;
   }, [countryOptions]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setTouched({});
+      setAttemptedSubmit(false);
+    }
+  }, [isOpen]);
 
   const applyPhonePrefill = useCallback((rawPhone = '') => {
     const normalizedMatch = (rawPhone || '').replace(/[^\d+]/g, '');
@@ -546,6 +698,7 @@ const CreateInquiryModal = ({
   }, [followUpDate, followUpTime, todayStr]);
 
   const handleSubmitInquiry = useCallback(async () => {
+    setAttemptedSubmit(true);
     if (!requiredFieldsOk) {
       if (!followUpDate || !followUpTime) {
         setFollowUpError((prev) => prev || 'Please select follow-up date and time.');
@@ -602,6 +755,13 @@ const CreateInquiryModal = ({
         const [y, m, d] = val.split('-');
         return `${d}-${m}-${y}`;
       };
+      const venueIdForPayload =
+        selectedVenueId === NO_VENUE_VALUE
+          ? 0
+          : selectedVenueId !== null
+            ? Number(selectedVenueId)
+            : '';
+
       const inquiryPayload = {
         gender: inquiryGender === 'male' ? 'M' : inquiryGender === 'female' ? 'F' : 'O',
         source: '19',
@@ -615,36 +775,36 @@ const CreateInquiryModal = ({
         doi: inquiryDate || '',
         mobile: normalizeLocalPhoneNumber(inquiryNumber),
         fname: inquiryFirstName || '',
-        category_id: inquiryProgram || '',
+        category_id: inquiryProgram !== null ? Number(inquiryProgram) : '',
         dob: inquiryDob || '',
         heard_from: inquiryCampaign || '',
         mobile2: normalizeLocalPhoneNumber(inquiryContact2Number),
         email: inquiryEmail || '',
         city: inquiryCity || '',
         country: inquiryCountry || '',
-        venue_id: inquiryVenue || '',
-        category: inquiryProgram ? [inquiryProgram] : [],
+        venue_id: venueIdForPayload,
+        category: inquiryProgram !== null ? [Number(inquiryProgram)] : [],
       };
 
       const followupPayload = {
         interest_string: inquiryStatus || 'Not Contacted',
         preferences: '',
         slot: '',
-        area: selectedVenueId === '0' ? inquiryAddress || '' : '',
+        area: selectedVenueId === NO_VENUE_VALUE ? inquiryAddress || '' : '',
         pincode: inquiryPincode || '',
         employee_id: duplicateAgentEmpId || '',
         time: followUpTime ? `${followUpTime}:00` : '',
         reminder: followUpDate && followUpTime ? `${followUpDate} ${followUpTime}:00` : '',
         country: inquiryCountry || '',
         city: inquiryCity || '',
-        venue_id: inquiryVenue || '',
+        venue_id: venueIdForPayload,
       };
 
       const payload = {
         inquiry: inquiryPayload,
         followup: followupPayload,
         contact_id: 0,
-        comment: inquiryNotes || '',
+        comment: inquiryNotes || 'Inquiry from Ticklegram chat ',
         existingContact: false,
         updateContact: true,
       };
@@ -740,9 +900,9 @@ const CreateInquiryModal = ({
         headers: token ? { Authorization: `Bearer ${token}` } : undefined,
       });
       const categories = (response.data?.data || []).map((c) => ({
-        id: c.id || c.category,
+        id: Number(c.id) || Number(c.category) || null,
         name: c.category || '',
-      }));
+      })).filter((c) => c.id !== null);
       setInquiryCategoryOptions(categories);
     } catch (error) {
       console.error('Error loading categories:', error);
@@ -783,7 +943,7 @@ const CreateInquiryModal = ({
       setSelectedCityId('');
       setInquiryCity('');
       setVenueOptions([]);
-      setSelectedVenueId('');
+      setSelectedVenueId(null);
       setInquiryVenue('');
       setVenueError('');
       try {
@@ -811,13 +971,13 @@ const CreateInquiryModal = ({
     async (cityName) => {
       if (!cityName) {
         setVenueOptions([]);
-        setSelectedVenueId('');
+        setSelectedVenueId(null);
         setInquiryVenue('');
         return;
       }
       setIsLoadingVenues(true);
       setVenueOptions([]);
-      setSelectedVenueId('');
+      setSelectedVenueId(null);
       setInquiryVenue('');
       setVenueError('');
       try {
@@ -826,19 +986,22 @@ const CreateInquiryModal = ({
           headers: token ? { Authorization: `Bearer ${token}` } : undefined,
           params: { city: cityName }
         });
-        const venues = (response.data?.data || []).map((v) => ({
-          id: v.id || v.venue || v.display_name || '',
-          name: v.display_name || v.venue || '',
-          rawVenue: v.venue,
-        }));
+        const venues = (response.data?.data || []).map((v) => {
+          const idNum = Number(v.id);
+          return {
+            id: Number.isFinite(idNum) ? idNum : null,
+            name: v.display_name || v.venue || '',
+            rawVenue: v.venue,
+          };
+        });
         const enhanced = [
-          { id: '0', name: 'No Venue', rawVenue: '' },
+          { id: NO_VENUE_VALUE, name: 'No Venue', rawVenue: '' },
           ...venues,
-        ];
+        ].filter((v) => v.id !== null);
         setVenueOptions(enhanced);
         if (enhanced.length > 0) {
           const first = enhanced[0];
-          setSelectedVenueId(first.id || '');
+          setSelectedVenueId(first.id);
           setInquiryVenue(first.name || first.rawVenue || '');
         }
       } catch (error) {
@@ -859,12 +1022,14 @@ const CreateInquiryModal = ({
   }, [fetchCountries, fetchCategories, fetchFollowupInterests]);
 
   useEffect(() => {
+    if (hasCategoryInteraction) return;
     if (inquiryType || inquiryCategoryOptions.length === 0) return;
     const first = inquiryCategoryOptions[0];
-    if (first?.name) {
-      setInquiryType(first.name);
+    if (first?.id !== undefined && first?.id !== null) {
+      setInquiryType(first.id);
+      setInquiryProgram(first.id);
     }
-  }, [inquiryCategoryOptions, inquiryType]);
+  }, [hasCategoryInteraction, inquiryCategoryOptions, inquiryType]);
 
   useEffect(() => {
     if (countryCodeManuallySet || hasAutoSetCountry) return;
@@ -1072,7 +1237,7 @@ const CreateInquiryModal = ({
           <div className="space-y-3">
             {/* Primary contact */}
             <div className="space-y-1">
-              <label className="text-xs text-[var(--tg-text-secondary)]">Phone number</label>
+              <label className="text-xs text-[var(--tg-text-secondary)]">Phone number *</label>
               <div className="flex gap-2 flex-wrap items-center">
                 {hasCountryOptions ? (
                   <SearchableSelect
@@ -1085,9 +1250,11 @@ const CreateInquiryModal = ({
                       setCountryCodeManuallySet(true);
                       setInquiryCountryCode(normalizeCountryCode(value || ''));
                     }}
+                    onBlur={() => markTouched('phone')}
                     placeholder={isLoadingCountries ? 'Loading...' : 'Country code'}
                     disabled={isLoadingCountries}
                     busy={isLoadingCountries}
+                    openOnFocus={false}
                   />
                 ) : (
                   <Input
@@ -1097,19 +1264,21 @@ const CreateInquiryModal = ({
                       setCountryCodeManuallySet(true);
                       setInquiryCountryCode(normalizeCountryCode(e.target.value));
                     }}
+                    onBlur={() => markTouched('phone')}
                     inputMode="tel"
                     autoComplete="tel-country-code"
                     className="w-32"
                     placeholder={isLoadingCountries ? 'Loading...' : '+1'}
                   />
                 )}
-                <Input
-                  {...AUTOFILL_PROPS}
+                <TextInputWithClear
                   value={inquiryNumber}
                   onChange={(e) => setInquiryNumber(normalizeLocalPhoneNumber(e.target.value))}
+                  onBlur={() => markTouched('phone')}
                   inputMode="tel"
                   autoComplete="tel-national"
                   placeholder="5551234567"
+                  ariaLabel="Clear phone number"
                   className={cn(
                     'flex-1 min-w-[220px]',
                     phoneValidationStatus === 'invalid' || inquiryPhoneError
@@ -1137,6 +1306,9 @@ const CreateInquiryModal = ({
                   )}
                 </Button>
               </div>
+              {shouldShowError('phone') && requiredErrors.phone && (
+                <p className="text-xs text-amber-400">{requiredErrors.phone}</p>
+              )}
               {!phoneValidationMessage && inquiryPhoneError && (
                 <p className="text-xs text-amber-400">{inquiryPhoneError}</p>
               )}
@@ -1216,29 +1388,32 @@ const CreateInquiryModal = ({
             <div className="grid sm:grid-cols-3 gap-3">
               <div className="space-y-1">
                 <label className="text-xs text-[var(--tg-text-secondary)]">First name</label>
-                <Input
-                  {...AUTOFILL_PROPS}
+                <TextInputWithClear
                   value={inquiryFirstName}
                   onChange={(e) => setInquiryFirstName(e.target.value)}
+                  onBlur={() => markTouched('firstName')}
                   placeholder="First"
+                  ariaLabel="Clear first name"
                 />
               </div>
               <div className="space-y-1">
                 <label className="text-xs text-[var(--tg-text-secondary)]">Middle name</label>
-                <Input
-                  {...AUTOFILL_PROPS}
+                <TextInputWithClear
                   value={inquiryMiddleName}
                   onChange={(e) => setInquiryMiddleName(e.target.value)}
+                  onBlur={() => markTouched('middleName')}
                   placeholder="Middle"
+                  ariaLabel="Clear middle name"
                 />
               </div>
               <div className="space-y-1">
                 <label className="text-xs text-[var(--tg-text-secondary)]">Last name</label>
-                <Input
-                  {...AUTOFILL_PROPS}
+                <TextInputWithClear
                   value={inquiryLastName}
                   onChange={(e) => setInquiryLastName(e.target.value)}
+                  onBlur={() => markTouched('lastName')}
                   placeholder="Last"
+                  ariaLabel="Clear last name"
                 />
               </div>
             </div>
@@ -1268,12 +1443,13 @@ const CreateInquiryModal = ({
               </div>
               <div className="space-y-1">
                 <label className="text-xs text-[var(--tg-text-secondary)]">Contact 2 mobile</label>
-                <Input
-                  {...AUTOFILL_PROPS}
+                <TextInputWithClear
                   value={inquiryContact2Number}
                   onChange={(e) => setInquiryContact2Number(normalizeLocalPhoneNumber(e.target.value))}
+                  onBlur={() => markTouched('contact2')}
                   inputMode="tel"
                   placeholder="Alternate number"
+                  ariaLabel="Clear alternate number"
                 />
               </div>
               <div className="space-y-1">
@@ -1306,7 +1482,7 @@ const CreateInquiryModal = ({
                 />
               </div>
               <div className="space-y-1">
-                <label className="text-xs text-[var(--tg-text-secondary)]">Country</label>
+                <label className="text-xs text-[var(--tg-text-secondary)]">Country *</label>
                 <SearchableSelect
                   options={countryOptions.map((c) => ({ value: String(c.id), label: c.name }))}
                   value={selectedCountryId}
@@ -1315,13 +1491,18 @@ const CreateInquiryModal = ({
                     const found = countryOptions.find((c) => String(c.id) === String(value));
                     setInquiryCountry(found?.name || '');
                   }}
+                  onBlur={() => markTouched('country')}
+                  hasError={shouldShowError('country')}
                   placeholder={isLoadingCountries ? 'Loading...' : 'Country'}
                   disabled={isLoadingCountries}
                   busy={isLoadingCountries}
                 />
+                {shouldShowError('country') && requiredErrors.country && (
+                  <p className="text-xs text-amber-400">{requiredErrors.country}</p>
+                )}
               </div>
               <div className="space-y-1">
-                <label className="text-xs text-[var(--tg-text-secondary)]">City</label>
+                <label className="text-xs text-[var(--tg-text-secondary)]">City *</label>
                 <SearchableSelect
                   options={cityOptions.map((c) => ({ value: String(c.id), label: c.name }))}
                   value={selectedCityId}
@@ -1332,48 +1513,80 @@ const CreateInquiryModal = ({
                     setInquiryCity(cityName);
                     fetchVenues(cityName);
                   }}
+                  onBlur={() => markTouched('city')}
+                  hasError={shouldShowError('city')}
                   placeholder={!selectedCountryId ? 'Select country first' : isLoadingCities ? 'Loading...' : 'City'}
                   disabled={!selectedCountryId || isLoadingCities}
                   busy={isLoadingCities || !selectedCountryId}
                 />
+                {shouldShowError('city') && requiredErrors.city && (
+                  <p className="text-xs text-amber-400">{requiredErrors.city}</p>
+                )}
               </div>
             </div>
             <div className="grid sm:grid-cols-3 gap-3">
               <div className="space-y-1">
-                <label className="text-xs text-[var(--tg-text-secondary)]">Venue</label>
+                <label className="text-xs text-[var(--tg-text-secondary)]">Venue *</label>
                 {venueOptions.length > 0 ? (
                   <SearchableSelect
                     options={venueOptions.map((venue) => ({
-                      value: String(venue.id),
+                      value: venue.id,
                       label: venue.name || venue.rawVenue || `Venue ${venue.id}`,
                     }))}
                     value={selectedVenueId}
                     onChange={(value) => {
-                      setSelectedVenueId(value || '');
+                      let nextVal = null;
+                      if (value === NO_VENUE_VALUE) {
+                        nextVal = NO_VENUE_VALUE;
+                      } else if (value !== null && value !== undefined && value !== '') {
+                        const num = Number(value);
+                        nextVal = Number.isFinite(num) ? num : null;
+                      }
+                      setSelectedVenueId(nextVal);
                       const found = venueOptions.find((v) => String(v.id) === String(value));
                       setInquiryVenue(found?.name || found?.rawVenue || '');
                     }}
+                    onBlur={() => markTouched('venue')}
+                    hasError={shouldShowError('venue')}
                     placeholder={isLoadingVenues ? 'Loading...' : 'Select venue'}
                     disabled={isLoadingVenues}
                     busy={isLoadingVenues}
                   />
                 ) : (
-                  <Input
-                    {...AUTOFILL_PROPS}
+                  <TextInputWithClear
                     value={inquiryVenue}
                     onChange={(e) => setInquiryVenue(e.target.value)}
+                    onBlur={() => markTouched('venue')}
                     placeholder={isLoadingVenues ? 'Loading venues...' : 'Enter venue'}
                     disabled={isLoadingVenues}
+                    ariaLabel="Clear venue"
+                    className={cn(
+                      shouldShowError('venue')
+                        ? 'border-red-500 focus-visible:ring-red-500 focus-visible:ring-2 focus-visible:ring-offset-0'
+                        : ''
+                    )}
                   />
                 )}
-                {selectedVenueId === '0' && (
-                  <Input
-                    {...AUTOFILL_PROPS}
+                {String(selectedVenueId) === '0' ? (
+                  <TextInputWithClear
                     value={inquiryAddress}
                     onChange={(e) => setInquiryAddress(e.target.value)}
+                    onBlur={() => markTouched('area')}
                     placeholder="Enter area (required when no venue)"
-                    className="mt-2"
+                    ariaLabel="Clear area"
+                    className={cn(
+                      'mt-2',
+                      shouldShowError('area')
+                        ? 'border-red-500 focus-visible:ring-red-500 focus-visible:ring-2 focus-visible:ring-offset-0'
+                        : ''
+                    )}
                   />
+                ) : null}
+                {shouldShowError('venue') && requiredErrors.venue && (
+                  <p className="text-xs text-amber-400">{requiredErrors.venue}</p>
+                )}
+                {shouldShowError('area') && requiredErrors.area && (
+                  <p className="text-xs text-amber-400">{requiredErrors.area}</p>
                 )}
                 {venueError && <p className="text-xs text-amber-400">{venueError}</p>}
               </div>
@@ -1388,38 +1601,86 @@ const CreateInquiryModal = ({
               </div> */}
               <div className="space-y-1">
                 <label className="text-xs text-[var(--tg-text-secondary)]">Pincode</label>
-                <Input
-                  {...AUTOFILL_PROPS}
+                <TextInputWithClear
                   value={inquiryPincode}
                   onChange={(e) => setInquiryPincode(e.target.value)}
+                  onBlur={() => markTouched('pincode')}
                   placeholder="123456"
+                  ariaLabel="Clear pincode"
                 />
+              </div>
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs text-[var(--tg-text-secondary)]">Comment</label>
+              <div className="relative">
+                <textarea
+                  {...AUTOFILL_PROPS}
+                  value={inquiryNotes}
+                  onChange={(e) => setInquiryNotes(e.target.value)}
+                  onBlur={() => markTouched('comment')}
+                  placeholder="Inquiry from Ticklegram chat"
+                  className="w-full rounded-md border border-[var(--tg-border-soft)] bg-[var(--tg-surface-muted)] px-3 py-2 pr-8 text-sm text-[var(--tg-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-0 focus-visible:ring-[var(--tg-accent-soft)]"
+                  rows={3}
+                />
+                {inquiryNotes && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setInquiryNotes('');
+                    }}
+                    className="absolute right-2 top-2 text-[var(--tg-text-muted)] hover:text-[var(--tg-text-primary)] focus:outline-none"
+                    aria-label="Clear comment"
+                  >
+                    ×
+                  </button>
+                )}
               </div>
             </div>
             <div className="grid sm:grid-cols-3 gap-3">
               <div className="space-y-1">
-                <label className="text-xs text-[var(--tg-text-secondary)]">Inquiry (Select Category)</label>
+                <label className="text-xs text-[var(--tg-text-secondary)]">Inquiry (Select Category) *</label>
                 <SearchableSelect
                   options={inquiryCategoryOptions.map((cat) => ({
-                    value: cat.name,
+                    value: cat.id,
                     label: cat.name,
                   }))}
                   value={inquiryType}
-                  onChange={(value) => setInquiryType(value || '')}
+                  onChange={(value) => {
+                    setHasCategoryInteraction(true);
+                    const nextVal = value === null || value === undefined || value === '' ? null : value;
+                    setInquiryType(nextVal);
+                    setInquiryProgram(nextVal);
+                  }}
+                  onBlur={() => markTouched('category')}
+                  hasError={shouldShowError('category')}
                   placeholder={isLoadingCategories ? 'Loading...' : 'Select category'}
                   disabled={isLoadingCategories}
                   busy={isLoadingCategories}
                 />
+                {shouldShowError('category') && requiredErrors.category && (
+                  <p className="text-xs text-amber-400">{requiredErrors.category}</p>
+                )}
               </div>
               <div className="space-y-1">
-                <label className="text-xs text-[var(--tg-text-secondary)]">Inquiry date</label>
+                <label className="text-xs text-[var(--tg-text-secondary)]">Inquiry date *</label>
                 <Input
                   {...AUTOFILL_PROPS}
                   type="date"
                   value={inquiryDate}
                   onChange={(e) => setInquiryDate(e.target.value)}
+                  onBlur={() => markTouched('inquiryDate')}
                   max={todayStr}
+                  className={cn(
+                    shouldShowError('inquiryDate')
+                      ? 'border-red-500 focus-visible:ring-red-500 focus-visible:ring-2 focus-visible:ring-offset-0'
+                      : ''
+                  )}
                 />
+                {shouldShowError('inquiryDate') && requiredErrors.inquiryDate && (
+                  <p className="text-xs text-amber-400">{requiredErrors.inquiryDate}</p>
+                )}
               </div>
               {/* <div className="space-y-1">
                 <label className="text-xs text-[var(--tg-text-secondary)]">Program</label>
@@ -1448,7 +1709,7 @@ const CreateInquiryModal = ({
                 />
               </div> */}
               <div className="space-y-1">
-                <label className="text-xs text-[var(--tg-text-secondary)]">Status</label>
+                <label className="text-xs text-[var(--tg-text-secondary)]">Status *</label>
                 <SearchableSelect
                   options={followupInterestOptions.map((item) => ({
                     value: item.name,
@@ -1456,32 +1717,55 @@ const CreateInquiryModal = ({
                   }))}
                   value={inquiryStatus}
                   onChange={(value) => setInquiryStatus(value || '')}
+                  onBlur={() => markTouched('status')}
+                  hasError={shouldShowError('status')}
                   placeholder={isLoadingFollowupInterest ? 'Loading...' : 'Select status'}
                   disabled={isLoadingFollowupInterest}
                   busy={isLoadingFollowupInterest}
                 />
+                {shouldShowError('status') && requiredErrors.status && (
+                  <p className="text-xs text-amber-400">{requiredErrors.status}</p>
+                )}
               </div>
             </div>
             <div className="grid sm:grid-cols-3 gap-3">
               <div className="space-y-1">
-                <label className="text-xs text-[var(--tg-text-secondary)]">Follow-up date</label>
+                <label className="text-xs text-[var(--tg-text-secondary)]">Follow-up date *</label>
                 <Input
                   {...AUTOFILL_PROPS}
                   type="date"
                   value={followUpDate}
                   onChange={(e) => setFollowUpDate(e.target.value)}
+                  onBlur={() => markTouched('followUpDate')}
                   min={todayStr}
+                  className={cn(
+                    shouldShowError('followUpDate')
+                      ? 'border-red-500 focus-visible:ring-red-500 focus-visible:ring-2 focus-visible:ring-offset-0'
+                      : ''
+                  )}
                 />
+                {shouldShowError('followUpDate') && requiredErrors.followUpDate && (
+                  <p className="text-xs text-amber-400">{requiredErrors.followUpDate}</p>
+                )}
               </div>
               <div className="space-y-1">
-                <label className="text-xs text-[var(--tg-text-secondary)]">Follow-up time</label>
+                <label className="text-xs text-[var(--tg-text-secondary)]">Follow-up time *</label>
                 <Input
                   {...AUTOFILL_PROPS}
                   type="time"
                   value={followUpTime}
                   onChange={(e) => setFollowUpTime(e.target.value)}
+                  onBlur={() => markTouched('followUpTime')}
                   min={followUpDate === todayStr ? currentTimeStr : undefined}
+                  className={cn(
+                    shouldShowError('followUpTime')
+                      ? 'border-red-500 focus-visible:ring-red-500 focus-visible:ring-2 focus-visible:ring-offset-0'
+                      : ''
+                  )}
                 />
+                {shouldShowError('followUpTime') && requiredErrors.followUpTime && (
+                  <p className="text-xs text-amber-400">{requiredErrors.followUpTime}</p>
+                )}
               </div>
               {/* <div className="space-y-1 flex items-center gap-4">
                 <label className="text-xs text-[var(--tg-text-secondary)]">Flags</label>
@@ -1536,17 +1820,27 @@ const CreateInquiryModal = ({
             </div>
           </div>
         </form>
-        <div className="sticky bottom-0 z-10 bg-[var(--tg-surface)] px-6 py-3 border-t border-[var(--tg-border-soft)] flex justify-end gap-2">
-          <Button variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button
-            className="bg-gradient-to-r from-purple-500 via-pink-500 to-orange-400 text-white"
-            onClick={handleSubmitInquiry}
-            disabled={!canCreateInquiry || isSubmittingInquiry}
-          >
-            {isSubmittingInquiry ? 'Creating...' : 'Create inquiry'}
-          </Button>
+        <div className="sticky bottom-0 z-10 bg-[var(--tg-surface)] px-6 py-3 border-t border-[var(--tg-border-soft)] flex flex-col gap-2">
+          <div className="flex items-center justify-between gap-3 text-[11px] text-[var(--tg-text-muted)]">
+            <span>Fill all required fields (*) to create the inquiry.</span>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button
+              className="bg-gradient-to-r from-purple-500 via-pink-500 to-orange-400 text-white"
+              onClick={handleSubmitInquiry}
+              disabled={!canCreateInquiry || isSubmittingInquiry}
+              title={
+                !canCreateInquiry && !isSubmittingInquiry
+                  ? 'Some required fields are missing. Please complete all fields marked with *.'
+                  : undefined
+              }
+            >
+              {isSubmittingInquiry ? 'Creating...' : 'Create inquiry'}
+            </Button>
+          </div>
         </div>
       </DialogContent>
     </Dialog>

@@ -16,7 +16,7 @@ import { Button } from './ui/button';
 
 const RolePill = ({ label }) => (
   <span className="px-2 py-0.5 rounded-full bg-[var(--tg-accent-soft)] text-[var(--tg-text-primary)] text-[11px] font-semibold">
-    {label || '—'}
+    {label || '-'}
   </span>
 );
 
@@ -50,6 +50,9 @@ const UserRosterCard = ({
   onAssignPosition,
   onToggleActive,
   canToggleActive = false,
+  onToggleReceiveChats,
+  canToggleReceiveChats = false,
+  chatToggleBusyUserId = null,
   canResetPasswords = false,
   onResetPassword,
 }) => {
@@ -126,6 +129,8 @@ const UserRosterCard = ({
             {activeList.map((user) => {
               const currentPositionId = user.position?.id || '__none__';
               const canEditRow = canAssignPositions && user.id !== currentUserId;
+              const isAgent = String(user.role || '').toLowerCase() === 'agent';
+              const receivesChats = user.can_receive_new_chats !== false;
               return (
                 <div
                   key={user.id}
@@ -134,8 +139,8 @@ const UserRosterCard = ({
                   <div className="flex-1 min-w-0">
                     <p className="font-semibold text-[var(--tg-text-primary)] truncate">{user.name}</p>
                     <p className="text-xs text-[var(--tg-text-muted)] truncate">
-                      {user.email || '—'}
-                      {user.contact_number ? ` · ${user.contact_number}` : ''}
+                      {user.email || '-'}
+                      {user.contact_number ? ` - ${user.contact_number}` : ''}
                     </p>
                   </div>
                   <div className="flex items-center gap-3">
@@ -167,6 +172,19 @@ const UserRosterCard = ({
                         <Switch
                           checked={user.is_active !== false}
                           onCheckedChange={(checked) => onToggleActive?.(user.id, checked, user.name)}
+                          disabled={chatToggleBusyUserId === user.id}
+                        />
+                      </div>
+                    )}
+                    {isAgent && canToggleReceiveChats && (
+                      <div className="flex items-center gap-2 text-xs text-[var(--tg-text-muted)]">
+                        <span>New chats</span>
+                        <Switch
+                          checked={receivesChats}
+                          onCheckedChange={(checked) =>
+                            onToggleReceiveChats?.(user.id, checked, user.name)
+                          }
+                          disabled={chatToggleBusyUserId === user.id}
                         />
                       </div>
                     )}
@@ -188,40 +206,58 @@ const UserRosterCard = ({
             {inactiveList.length > 0 && (
               <div className="pt-6 space-y-3">
                 <p className="text-xs uppercase tracking-wide text-[var(--tg-text-muted)]">Inactive users</p>
-                {inactiveList.map((user) => (
-                  <div
-                    key={user.id}
-                    className="flex items-center justify-between gap-4 rounded-2xl border border-dashed border-[var(--tg-border-soft)] bg-[var(--tg-surface-muted)] px-4 py-3"
-                  >
-                    <div className="flex-1 min-w-0">
-                      <p className="font-semibold text-[var(--tg-text-primary)] truncate">{user.name}</p>
-                      <p className="text-xs text-[var(--tg-text-muted)] truncate">
-                        {user.email || '—'}
-                        {user.contact_number ? ` · ${user.contact_number}` : ''}
-                      </p>
+                {inactiveList.map((user) => {
+                  const isAgent = String(user.role || '').toLowerCase() === 'agent';
+                  const receivesChats = user.can_receive_new_chats !== false;
+                  return (
+                    <div
+                      key={user.id}
+                      className="flex items-center justify-between gap-4 rounded-2xl border border-dashed border-[var(--tg-border-soft)] bg-[var(--tg-surface-muted)] px-4 py-3"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <p className="font-semibold text-[var(--tg-text-primary)] truncate">{user.name}</p>
+                        <p className="text-xs text-[var(--tg-text-muted)] truncate">
+                          {user.email || '-'}
+                          {user.contact_number ? ` - ${user.contact_number}` : ''}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        {isAgent && canToggleReceiveChats && (
+                          <div className="flex items-center gap-2 text-xs text-[var(--tg-text-muted)]">
+                            <span>New chats</span>
+                            <Switch
+                              checked={receivesChats}
+                              onCheckedChange={(checked) =>
+                                onToggleReceiveChats?.(user.id, checked, user.name)
+                              }
+                              disabled={chatToggleBusyUserId === user.id}
+                            />
+                          </div>
+                        )}
+                        {canToggleActive && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => onToggleActive?.(user.id, true)}
+                            className="text-xs"
+                          >
+                            Activate
+                          </Button>
+                        )}
+                        {canResetPasswords && (
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => onResetPassword?.(user)}
+                            className="text-xs"
+                          >
+                            Reset password
+                          </Button>
+                        )}
+                      </div>
                     </div>
-                    {canToggleActive && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => onToggleActive?.(user.id, true)}
-                        className="text-xs"
-                      >
-                        Activate
-                      </Button>
-                    )}
-                    {canResetPasswords && (
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        onClick={() => onResetPassword?.(user)}
-                        className="text-xs"
-                      >
-                        Reset password
-                      </Button>
-                    )}
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>

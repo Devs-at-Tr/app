@@ -17,7 +17,7 @@ const StatsPage = ({ user, onLogout }) => {
   const canManageIntegrations = useMemo(() => hasPermission(user, 'integration:manage'), [user]);
   const canManagePositions = useMemo(() => hasPermission(user, 'position:manage'), [user]);
   const canViewUserRoster = useMemo(
-    () => hasAnyPermission(user, ['position:assign', 'position:manage', 'chat:assign']),
+    () => hasAnyPermission(user, ['position:assign', 'position:manage']),
     [user]
   );
   const canInviteUsers = useMemo(() => hasPermission(user, 'user:invite'), [user]);

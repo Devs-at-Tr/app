@@ -144,6 +144,22 @@ class InquiryInsertRequest(BaseModel):
     existingContact: Optional[bool] = False  # noqa: N815
     updateContact: Optional[bool] = True    # noqa: N815
 
+
+def _coerce_numeric_id(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            return int(value)
+        except Exception:
+            return None
+    text_val = str(value).strip()
+    # Accept clean numeric strings and reject mixed strings to avoid mapping display names
+    if text_val.isdigit():
+        return int(text_val)
+    return None
+
+
 class PhoneValidationRequest(BaseModel):
     country_code: str
     phone_number: str
@@ -525,11 +541,10 @@ def insert_inquiry(
 ):
     admin_url = os.environ.get("ADMIN_URL")
     form_token = payload.form_token or os.environ.get("FORM_TOKEN")
-    bid = payload.bid or os.environ.get("BID")
     admin_cookie = os.environ.get("ADMIN_COOKIE")
     emp_id = payload.inquiry.get("employee_id") or getattr(current_user, "emp_id", None)
 
-    if not admin_url or not form_token or not bid:
+    if not admin_url or not form_token:
         raise HTTPException(status_code=500, detail="Inquiry insert config missing in environment")
     if not emp_id:
         raise HTTPException(status_code=400, detail="Employee ID is required to create inquiry")
@@ -538,14 +553,14 @@ def insert_inquiry(
 
     session = requests.Session()
     headers = {
-        "bid": bid,
         "Content-Type": "application/json",
     }
     if admin_cookie:
         headers["Cookie"] = admin_cookie
 
-    # Ensure employee is selected (sets server-side context/cookies) and capture user_id
+    # Resolve bid and user_id via employee select (sets server-side context/cookies)
     resolved_uid = None
+    resolved_bid = None
     try:
         select_target = admin_url.rstrip("/") + "/routes/employeeRoute.php?action=select"
         select_data = {
@@ -563,24 +578,69 @@ def insert_inquiry(
                     rows = select_json.get("data") or []
                     if isinstance(rows, list) and rows:
                         resolved_uid = rows[0].get("user_id") or resolved_uid
+                        resolved_bid = select_json.get("bid") or resolved_bid
             except Exception:
                 pass
     except Exception as exc:
         logging.warning("Employee select failed prior to inquiry insert: %s", exc)
     headers["uid"] = resolved_uid or os.environ.get("UID") or ""
+    headers["bid"] = resolved_bid or payload.bid or os.environ.get("BID") or ""
 
     insert_target = admin_url.rstrip("/") + "/routes/inquiryRoute.php?action=insert"
     request_body = payload.model_dump()
-    # Enforce env tokens/bid
+    # Enforce env tokens/bid (bid resolved from select if available)
     request_body["form_token"] = form_token
-    request_body["bid"] = bid
+    request_body["bid"] = headers.get("bid") or payload.bid or os.environ.get("BID")
+    # Ensure employee_id is set for inquiry and follow-up
+    request_body.setdefault("inquiry", {})["employee_id"] = emp_id
+    request_body.setdefault("followup", {})["employee_id"] = emp_id
+
+    # Coerce venue_id to numeric where possible
+    inquiry_venue = request_body.get("inquiry", {}).get("venue_id")
+    followup_venue = request_body.get("followup", {}).get("venue_id")
+    coerced_inquiry_venue = _coerce_numeric_id(inquiry_venue)
+    coerced_followup_venue = _coerce_numeric_id(followup_venue)
+    if coerced_inquiry_venue is not None:
+        request_body["inquiry"]["venue_id"] = coerced_inquiry_venue
+    if coerced_followup_venue is not None:
+        request_body["followup"]["venue_id"] = coerced_followup_venue
+
+    # Coerce inquiry category_id to numeric (use category as fallback if it carries the id)
+    inquiry_category_id = request_body.get("inquiry", {}).get("category_id")
+    inquiry_category_fallback = request_body.get("inquiry", {}).get("category")
+    coerced_category_id = _coerce_numeric_id(inquiry_category_id)
+    if coerced_category_id is None:
+        coerced_category_id = _coerce_numeric_id(inquiry_category_fallback)
+    if coerced_category_id is not None:
+        request_body["inquiry"]["category_id"] = coerced_category_id
+        # Ensure category array includes the numeric id as string
+        request_body["inquiry"]["category"] = [str(coerced_category_id)]
+    else:
+        # If category array has values, try to coerce the first one as id
+        category_list = request_body.get("inquiry", {}).get("category")
+        if isinstance(category_list, list) and category_list:
+            coerced_from_list = _coerce_numeric_id(category_list[0])
+            if coerced_from_list is not None:
+                request_body["inquiry"]["category_id"] = coerced_from_list
+                request_body["inquiry"]["category"] = [str(coerced_from_list)]
+
+    logging.info("Inquiry insert target=%s payload=%s", insert_target, json.dumps(request_body, default=str))
 
     try:
         resp = session.post(insert_target, json=request_body, headers=headers, timeout=20)
+        logging.info(
+            "Inquiry insert response status=%s body=%s",
+            resp.status_code,
+            resp.text,
+        )
         if resp.status_code >= 400:
             logging.warning("Inquiry insert bad status %s: %s", resp.status_code, resp.text)
             raise HTTPException(status_code=resp.status_code, detail="Failed to create inquiry")
-        result = resp.json()
+        try:
+            result = resp.json()
+        except ValueError:
+            logging.warning("Inquiry insert non-JSON response: %s", resp.text)
+            raise HTTPException(status_code=502, detail="Invalid response from inquiry insert target")
         # Bubble up cookies if needed downstream
         if response is not None and resp.cookies:
             for key, val in resp.cookies.items():
@@ -1584,6 +1644,8 @@ def _is_assignable_agent(user: Optional[User]) -> bool:
         return False
     if hasattr(user, "is_active") and not user.is_active:
         return False
+    if getattr(user, "can_receive_new_chats", True) is False:
+        return False
     position = getattr(user, "position", None)
     if position and position.slug != DEFAULT_POSITION_SLUGS["agent"]:
         return False
@@ -1595,6 +1657,7 @@ def _get_assignable_agents(db: Session) -> List[User]:
         .options(joinedload(User.position))
         .filter(User.role == UserRole.AGENT)
         .filter(User.is_active.is_(True))
+        .filter(User.can_receive_new_chats.is_(True))
         .all()
     )
     return [agent for agent in agents if _is_assignable_agent(agent)]
@@ -3868,8 +3931,10 @@ def assign_chat(
             .filter(User.id == assignment.agent_id, User.role == UserRole.AGENT)
             .first()
         )
-        if not agent or not _is_assignable_agent(agent):
+        if not agent:
             raise HTTPException(status_code=404, detail="Agent not found")
+        if getattr(agent, "is_active", True) is False:
+            raise HTTPException(status_code=400, detail="Agent is inactive")
         chat.assigned_to = assignment.agent_id
         chat.status = ChatStatus.ASSIGNED
     else:
@@ -4991,7 +5056,7 @@ def assign_chat_by_employee(
     )
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found for employee_id")
-    if not _is_assignable_agent(agent):
+    if getattr(agent, "is_active", True) is False:
         raise HTTPException(status_code=400, detail="Agent is inactive")
 
     chat.assigned_to = agent.id

@@ -41,7 +41,9 @@ def _load_runner(module_name: str) -> Optional[Callable[[Any], None]]:
         return None
     module = importlib_util.module_from_spec(module_spec)
     module_spec.loader.exec_module(module)  # type: ignore[union-attr]
-    return getattr(module, "run_migration", None) or getattr(module, "upgrade", None)
+    # Only run explicit legacy-style run_migration callables; Alembic migrations
+    # that rely on the `op` context should be executed via Alembic, not here.
+    return getattr(module, "run_migration", None)
 
 
 def run_all_migrations(target_engine=None) -> None:

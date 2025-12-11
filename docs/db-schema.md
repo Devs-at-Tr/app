@@ -27,6 +27,7 @@
 | role | enum(admin, agent) | NO | agent | |
 | position_id | varchar(36) | YES | | FK → positions.id (INDEX) |
 | is_active | bool | NO | True | server_default=1 |
+| can_receive_new_chats | bool | NO | True | server_default=1 |
 | created_at | datetime tz | NO | utc_now | |
 | updated_at | datetime tz | NO | utc_now, on update |
 

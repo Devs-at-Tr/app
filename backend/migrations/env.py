@@ -17,10 +17,17 @@ config = context.config
 # Inject runtime database URL
 db_url = get_database_url()
 if db_url:
-    config.set_main_option("sqlalchemy.url", db_url)
+    # ConfigParser treats % as interpolation; escape to preserve passwords with %.
+    safe_url = db_url.replace("%", "%%")
+    config.set_main_option("sqlalchemy.url", safe_url)
 
+# Safely load logging config if present and well-formed
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    try:
+        fileConfig(config.config_file_name, disable_existing_loggers=False)
+    except KeyError:
+        # Skip logging config if sections (e.g., formatters) are missing
+        pass
 
 target_metadata = Base.metadata
 

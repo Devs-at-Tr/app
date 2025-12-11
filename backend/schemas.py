@@ -121,6 +121,7 @@ class AdminUserCreate(BaseModel):
     password: str = Field(min_length=8)
     role: UserRole = UserRole.AGENT
     position_id: Optional[str] = None
+    can_receive_new_chats: Optional[bool] = True
 
     @field_validator("contact_number")
     @classmethod
@@ -177,6 +178,7 @@ class UserResponse(BaseModel):
     emp_id: Optional[str] = None
     role: UserRole
     is_active: bool = True
+    can_receive_new_chats: bool = True
     position: Optional[PositionResponse] = None
     permissions: List[str] = Field(default_factory=list)
     created_at: datetime
@@ -201,6 +203,10 @@ class UserRosterEntry(UserResponse):
 
 class UserActiveUpdate(BaseModel):
     is_active: bool
+
+
+class UserChatRoutingUpdate(BaseModel):
+    can_receive_new_chats: bool
 
 # Database Visualizer Schemas
 

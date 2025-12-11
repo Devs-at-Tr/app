@@ -10,7 +10,7 @@ const PositionsPage = ({ user, onLogout }) => {
   const canManageTemplates = useMemo(() => hasPermission(user, 'template:manage'), [user]);
   const canManageIntegrations = useMemo(() => hasPermission(user, 'integration:manage'), [user]);
   const canViewUserRoster = useMemo(
-    () => hasAnyPermission(user, ['position:assign', 'position:manage', 'chat:assign']),
+    () => hasAnyPermission(user, ['position:assign', 'position:manage']),
     [user]
   );
   const canInviteUsers = useMemo(() => hasPermission(user, 'user:invite'), [user]);

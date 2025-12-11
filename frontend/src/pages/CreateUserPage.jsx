@@ -7,6 +7,7 @@ import { API } from '../App';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
+import { Switch } from '../components/ui/switch';
 import { hasPermission, hasAnyPermission } from '../utils/permissionUtils';
 import { buildNavigationItems } from '../utils/navigationConfig';
 
@@ -18,7 +19,8 @@ const DEFAULT_FORM = {
   empId: '',
   password: 'TempPass1',
   role: 'agent',
-  positionId: ''
+  positionId: '',
+  canReceiveNewChats: true
 };
 
 const CreateUserPage = ({ user, onLogout }) => {
@@ -34,7 +36,7 @@ const CreateUserPage = ({ user, onLogout }) => {
   const canManageIntegrations = useMemo(() => hasPermission(user, 'integration:manage'), [user]);
   const canManagePositions = useMemo(() => hasPermission(user, 'position:manage'), [user]);
   const canViewUserRoster = useMemo(
-    () => hasAnyPermission(user, ['position:assign', 'position:manage', 'chat:assign']),
+    () => hasAnyPermission(user, ['position:assign', 'position:manage']),
     [user]
   );
   const canInviteUsers = useMemo(() => hasPermission(user, 'user:invite'), [user]);
@@ -141,7 +143,8 @@ const CreateUserPage = ({ user, onLogout }) => {
           emp_id: empId,
           password: form.password,
           role: form.role,
-          position_id: form.positionId || null
+          position_id: form.positionId || null,
+          can_receive_new_chats: !!form.canReceiveNewChats
         },
         {
           headers: { Authorization: `Bearer ${token}` },
@@ -315,6 +318,21 @@ const CreateUserPage = ({ user, onLogout }) => {
                 <p className="mt-1 text-xs text-[var(--tg-text-muted)]">
                   Used for directory search and employee record keeping.
                 </p>
+              </div>
+              <div>
+                <Label className="text-sm text-[var(--tg-text-secondary)]">
+                  Allow this agent to receive new chats
+                </Label>
+                <div className="mt-2 flex items-center justify-between rounded-lg border border-[var(--tg-border-soft)] bg-[var(--tg-surface-muted)] px-3 py-2">
+                  <div className="text-xs text-[var(--tg-text-secondary)]">
+                    Toggle off to keep this user but pause new chat assignments.
+                  </div>
+                  <Switch
+                    checked={form.canReceiveNewChats}
+                    onCheckedChange={(checked) => setForm((prev) => ({ ...prev, canReceiveNewChats: checked }))}
+                    disabled={submitting}
+                  />
+                </div>
               </div>
             </div>
 

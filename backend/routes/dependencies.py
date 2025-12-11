@@ -45,7 +45,11 @@ def _is_assignable_agent(user: Optional[User]) -> bool:
         return False
     if user.role != UserRole.AGENT:
         return False
-    return bool(getattr(user, "is_active", True))
+    if getattr(user, "is_active", True) is False:
+        return False
+    if getattr(user, "can_receive_new_chats", True) is False:
+        return False
+    return True
 
 
 async def get_current_user(

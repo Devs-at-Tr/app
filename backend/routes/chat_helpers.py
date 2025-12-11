@@ -90,7 +90,11 @@ def _is_assignable_agent(user: Optional[User]) -> bool:
         return False
     if user.role != UserRole.AGENT:
         return False
-    return bool(getattr(user, "is_active", True))
+    if getattr(user, "is_active", True) is False:
+        return False
+    if getattr(user, "can_receive_new_chats", True) is False:
+        return False
+    return True
 
 
 def _get_assignable_agents(db: Session) -> List[User]:
@@ -99,6 +103,7 @@ def _get_assignable_agents(db: Session) -> List[User]:
         .options(joinedload(User.position))
         .filter(User.role == UserRole.AGENT)
         .filter(User.is_active.is_(True))
+        .filter(User.can_receive_new_chats.is_(True))
         .all()
     )
     return [agent for agent in agents if _is_assignable_agent(agent)]

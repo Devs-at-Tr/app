@@ -835,7 +835,8 @@ const extractVariables = (content) => {
                                   const nameParts = splitFullName(chatDisplayName || '');
                                   setCreateInquiryPrefill({
                                     phone: normalizedMatch,
-                                    notes: `Inquiry from chat ${chat?.id || ''}`,
+                                    // Keep the inquiry comment consistent with the default modal text
+                                    notes: 'Inquiry from Ticklegram chat ',
                                     firstName: nameParts.first,
                                     middleName: nameParts.middle,
                                     lastName: nameParts.last,
