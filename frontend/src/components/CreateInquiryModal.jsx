@@ -414,6 +414,20 @@ const CreateInquiryModal = ({
   const [followUpError, setFollowUpError] = useState('');
   const [isSubmittingInquiry, setIsSubmittingInquiry] = useState(false);
   const countryOptionsRef = useRef([]);
+  const resolvedEmployeeId = useMemo(() => {
+    const assignedEmp =
+      chat?.assigned_agent?.emp_id ||
+      chat?.assigned_agent?.employee_id ||
+      chat?.assigned_agent?.empId ||
+      null;
+    if (assignedEmp) {
+      return String(assignedEmp);
+    }
+    if (duplicateAgentEmpId) {
+      return duplicateAgentEmpId;
+    }
+    return '';
+  }, [chat?.assigned_agent, duplicateAgentEmpId]);
 
   const normalizedInquiryPhone = useMemo(
     () => buildE164Number(inquiryCountryCode, inquiryNumber),
@@ -766,7 +780,7 @@ const CreateInquiryModal = ({
         gender: inquiryGender === 'male' ? 'M' : inquiryGender === 'female' ? 'F' : 'O',
         source: '19',
         auto_assign_inq: autoAssignInquiry ? '1' : '0',
-        employee_id: duplicateAgentEmpId || '',
+        employee_id: resolvedEmployeeId,
         lname: inquiryLastName || '',
         mname: inquiryMiddleName || '',
         country_code: inquiryCountryCode || '',
@@ -792,7 +806,7 @@ const CreateInquiryModal = ({
         slot: '',
         area: selectedVenueId === NO_VENUE_VALUE ? inquiryAddress || '' : '',
         pincode: inquiryPincode || '',
-        employee_id: duplicateAgentEmpId || '',
+        employee_id: resolvedEmployeeId,
         time: followUpTime ? `${followUpTime}:00` : '',
         reminder: followUpDate && followUpTime ? `${followUpDate} ${followUpTime}:00` : '',
         country: inquiryCountry || '',
