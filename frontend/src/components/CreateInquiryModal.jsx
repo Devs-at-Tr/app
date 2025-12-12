@@ -1581,7 +1581,7 @@ const CreateInquiryModal = ({
                     )}
                   />
                 )}
-                {String(selectedVenueId) === '0' ? (
+                {selectedVenueId === NO_VENUE_VALUE ? (
                   <TextInputWithClear
                     value={inquiryAddress}
                     onChange={(e) => setInquiryAddress(e.target.value)}
